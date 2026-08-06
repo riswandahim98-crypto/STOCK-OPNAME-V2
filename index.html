@@ -137,7 +137,6 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
         <span class="chip on" data-f="all">Semua</span>
         <span class="chip" data-f="belum">Belum</span>
         <span class="chip" data-f="isi">Terisi</span>
-        <span class="chip" data-f="selisih">Selisih</span>
       </div>
     </div>
     <div class="card" id="listCard"></div>
@@ -368,18 +367,16 @@ function isFilled(it){ return finalQty(it)!=null; }
 /* ============ RENDER LIST ============ */
 function renderList(){
   var items=state.items, q=state.q.trim();
-  var stats={total:items.length,isi:0,belum:0,selisih:0};
-  items.forEach(function(it){ var f=finalQty(it); if(f==null)stats.belum++; else{stats.isi++; if(it.sistem!=null&&f!==it.sistem)stats.selisih++;} });
+  var stats={total:items.length,isi:0,belum:0};
+  items.forEach(function(it){ if(isFilled(it))stats.isi++; else stats.belum++; });
   $('stats').innerHTML =
     '<div class="s"><b>'+stats.total+'</b><span>Item</span></div>'+
     '<div class="s"><b style="color:var(--ok)">'+stats.isi+'</b><span>Terisi</span></div>'+
-    '<div class="s"><b style="color:var(--warn)">'+stats.belum+'</b><span>Belum</span></div>'+
-    '<div class="s"><b style="color:var(--bad)">'+stats.selisih+'</b><span>Selisih</span></div>';
+    '<div class="s"><b style="color:var(--warn)">'+stats.belum+'</b><span>Belum</span></div>';
 
   var list=items;
   if(state.filter==='belum') list=list.filter(function(it){return !isFilled(it);});
   else if(state.filter==='isi') list=list.filter(isFilled);
-  else if(state.filter==='selisih') list=list.filter(function(it){var f=finalQty(it);return f!=null&&it.sistem!=null&&f!==it.sistem;});
 
   if(q){ var scored=list.map(function(it){return{it:it,s:score(it,q)};}).filter(function(x){return x.s>0;}); scored.sort(function(a,b){return b.s-a.s;}); list=scored.map(function(x){return x.it;}); }
 
@@ -391,11 +388,11 @@ function itemHTML(it,q){
   var i=it._i;
   var f=finalQty(it);
   var badge = f==null ? '<span class="badge b-belum">Belum</span>'
-            : (it.sistem!=null&&f!==it.sistem ? '<span class="badge b-selisih">Δ '+(f-it.sistem)+'</span>' : '<span class="badge b-isi">✓ '+f+'</span>');
+            : '<span class="badge b-isi">✓ '+f+'</span>';
   var sub=[it.brand,it.rack||it.penyimpanan,it.barcode].filter(Boolean).join(' · ');
   return '<div class="item" data-i="'+i+'">'+
     '<div style="min-width:0"><div class="nm">'+hl(esc(it.nama),q)+'</div><div class="sub">'+hl(esc(sub),q)+'</div></div>'+
-    '<div class="rt">'+badge+'<div class="sub">sistem '+(it.sistem==null?'-':it.sistem)+'</div></div></div>';
+    '<div class="rt">'+badge+'</div></div>';
 }
 function score(it,q){
   var ql=q.toLowerCase();
@@ -436,7 +433,7 @@ function openEditor(it){
   var f=finalQty(it);
   var sel=[
     ['Kategori',it.kategori],['Brand',it.brand],['Satuan',it.satuan],
-    ['Penyimpanan',it.penyimpanan],['Rack',it.rack],['Qty Sistem',it.sistem==null?'-':it.sistem]
+    ['Penyimpanan',it.penyimpanan],['Rack',it.rack]
   ].map(function(k){return '<div class="kv"><span class="muted">'+k[0]+'</span><b>'+esc(String(k[1]||'-'))+'</b></div>';}).join('');
   var boxHTML = hasBox ? qtyFieldHTML('Box','edBox',it.box) : '';
   $('edSheet').innerHTML=
@@ -452,7 +449,6 @@ function openEditor(it){
       qtyFieldHTML('Reconcile 3','edRec3',it.rec3)+
     '</div>'+
     '<div class="kv" style="margin-top:8px;font-size:14px"><span>Qty Hitung (terakhir terisi)</span><b id="edFinal">'+(f==null?'-':f)+'</b></div>'+
-    '<div class="kv" style="font-size:14px"><span>Selisih vs Sistem</span><b id="edDiff">-</b></div>'+
     '<button class="btn" id="edSave" style="margin-top:12px">💾 Simpan</button>';
   $('edBack').classList.remove('hidden');
   $('edClose').onclick=closeEditor;
@@ -477,8 +473,6 @@ function updateEdSummary(){
   var seq=[edVal('edQinit'),edVal('edRec1'),edVal('edRec2'),edVal('edRec3')], f=null;
   for(var i=0;i<seq.length;i++) if(seq[i]!=null) f=seq[i];
   $('edFinal').textContent = f==null?'-':f;
-  var d=$('edDiff'); if(f==null||editing.sistem==null){ d.textContent='-'; d.style.color=''; }
-  else{ var diff=f-editing.sistem; d.textContent=(diff>0?'+':'')+diff; d.style.color=diff===0?'var(--ok)':'var(--bad)'; }
 }
 function closeEditor(){ $('edBack').classList.add('hidden'); editing=null; focusScan(); }
 function saveEditor(){
