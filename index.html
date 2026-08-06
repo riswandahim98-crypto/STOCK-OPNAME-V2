@@ -337,13 +337,15 @@ function loadSheet(){
   var shownCache=false, c=cacheRead();
   if(c && c.length){ state.items=c; indexItems(); renderList(); focusScan(); shownCache=true; }
   else $('listCard').innerHTML='<div style="padding:20px" class="muted">Memuat item…</div>';
-  gvizSheet(state.sessionId, state.wh).then(function(rows){
-    setItems(rows); renderList(); focusScan(); cacheWrite();
+  // Baca via BACKEND dulu (getValues -> KEBAL filter/sortir yang dipasang di sheet).
+  postExec({action:'sheet', id:state.sessionId, sheet:state.wh}).then(function(j){
+    if(!j || !j.ok || !j.rows) throw new Error('bad');
+    setItems(j.rows); renderList(); focusScan(); cacheWrite();
   }).catch(function(){
-    if(shownCache) return;                 // sudah ada cache tampil, biarkan
-    postExec({action:'sheet', id:state.sessionId, sheet:state.wh}).then(function(j){
-      setItems((j&&j.rows)||[]); renderList(); focusScan();
-    }).catch(function(){ $('listCard').innerHTML='<div style="padding:20px" class="muted">Gagal memuat. Cek koneksi / sharing dokumen sesi.</div>'; });
+    // fallback gviz (lebih cepat tapi ikut filter sheet) — hanya kalau backend gagal
+    gvizSheet(state.sessionId, state.wh).then(function(rows){
+      setItems(rows); renderList(); focusScan(); cacheWrite();
+    }).catch(function(){ if(!shownCache) $('listCard').innerHTML='<div style="padding:20px" class="muted">Gagal memuat. Cek koneksi / URL /exec.</div>'; });
   });
 }
 function normItem(o){
