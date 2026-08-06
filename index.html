@@ -119,7 +119,10 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
     <select id="selSession"></select>
     <label>Jenis Gudang</label>
     <div class="chips" id="whChips"></div>
-    <button class="btn" id="btnStart">Mulai Hitung</button>
+    <label>Tahap Hitung</label>
+    <div class="chips" id="stageChips"></div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">Mode buta: kamu hanya mengisi tahap terpilih, tak melihat angka tahap lain.</div>
+    <button class="btn" id="btnStart" style="margin-top:10px">Mulai Hitung</button>
     <div id="pickMsg" class="muted"></div>
   </div>
 </div>
@@ -179,13 +182,21 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
 var DEFAULT_EXEC = 'https://script.google.com/macros/s/AKfycbyACbDpID4aCx827l7_5Q_wB7Fowb8WN66aik_88mICT2E5EqZUIAf_jOmwttcCYhkg/exec';
 var LS = {
   exec:'so_exec', theme:'so_theme', user:'so_user',
-  session:'so_session', wh:'so_wh'
+  session:'so_session', wh:'so_wh', stage:'so_stage'
 };
 var WAREHOUSES = ['ETALASE','BULK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
+// Tahap hitung (mode buta): tiap tahap = 1 field qty + 1 kolom PIC di sheet
+var STAGES = [
+  {k:'qinit', short:'Inisial',   label:'Qty Inisial',  pic:'picInisial'},
+  {k:'rec1',  short:'Rec 1',     label:'Reconcile 1',  pic:'picRec1'},
+  {k:'rec2',  short:'Rec 2',     label:'Reconcile 2',  pic:'picRec2'},
+  {k:'rec3',  short:'Rec 3',     label:'Reconcile 3',  pic:'picRec3'}
+];
+function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.stage) return STAGES[i]; return STAGES[0]; }
 var state = {
   exec:'', user:'', pics:[], sessions:[],
-  sessionId:'', sessionName:'', wh:'', items:[], byBarcode:{}, byKode:{}, filter:'all', q:''
+  sessionId:'', sessionName:'', wh:'', stage:'qinit', items:[], byBarcode:{}, byKode:{}, filter:'all', q:''
 };
 var scanner=null;
 
@@ -305,12 +316,19 @@ function startPick(){
     wc.appendChild(el); });
   var lastWh=localStorage.getItem(LS.wh)||'ETALASE';
   [].forEach.call(wc.children,function(c){ if(c.dataset.w===lastWh){c.classList.add('on');state.wh=lastWh;} });
+  // stage chips
+  var sc=$('stageChips'); sc.innerHTML='';
+  STAGES.forEach(function(st){ var el=document.createElement('span'); el.className='chip'; el.textContent=st.short; el.dataset.k=st.k;
+    el.onclick=function(){ [].forEach.call(sc.children,function(c){c.classList.remove('on');}); el.classList.add('on'); state.stage=st.k; };
+    sc.appendChild(el); });
+  var lastStage=localStorage.getItem(LS.stage)||'qinit';
+  [].forEach.call(sc.children,function(c){ if(c.dataset.k===lastStage){c.classList.add('on');state.stage=lastStage;} });
 }
 $('btnStart').onclick=function(){
   var sel=$('selSession'); if(!sel.value){ $('pickMsg').textContent='Pilih sesi.'; return; }
   if(!state.wh){ $('pickMsg').textContent='Pilih jenis gudang.'; return; }
   state.sessionId=sel.value; state.sessionName=sel.options[sel.selectedIndex].text;
-  localStorage.setItem(LS.session,state.sessionId); localStorage.setItem(LS.wh,state.wh);
+  localStorage.setItem(LS.session,state.sessionId); localStorage.setItem(LS.wh,state.wh); localStorage.setItem(LS.stage,state.stage);
   loadSheet();
 };
 
@@ -356,29 +374,29 @@ function normItem(o){
     sistem:num(o['Qty Sistem']),
     box:num(o['Box']), qinit:num(o['Qty Inisial']),
     rec1:num(o['Reconcile 1']), rec2:num(o['Reconcile 2']), rec3:num(o['Reconcile 3']),
-    petugas:String(o['Petugas']||''), waktu:String(o['Waktu']||'')
+    picInisial:String(o['PIC Inisial']||''), picRec1:String(o['PIC Rec 1']||''),
+    picRec2:String(o['PIC Rec 2']||''), picRec3:String(o['PIC Rec 3']||''),
+    waktu:String(o['Waktu']||'')
   };
 }
-function finalQty(it){ // nilai hitung terakhir yang terisi (inisial→rec3)
-  var seq=[it.qinit,it.rec1,it.rec2,it.rec3], v=null;
-  for(var i=0;i<seq.length;i++) if(seq[i]!=null) v=seq[i];
-  return v;
-}
-function isFilled(it){ return finalQty(it)!=null; }
+// Nilai & status TAHAP AKTIF saja (mode buta — tak lihat tahap lain)
+function stageVal(it){ return it[state.stage]; }
+function stageFilled(it){ return stageVal(it)!=null; }
+function stagePic(it){ return it[stageDef().pic]||''; }
 
 /* ============ RENDER LIST ============ */
 function renderList(){
   var items=state.items, q=state.q.trim();
   var stats={total:items.length,isi:0,belum:0};
-  items.forEach(function(it){ if(isFilled(it))stats.isi++; else stats.belum++; });
+  items.forEach(function(it){ if(stageFilled(it))stats.isi++; else stats.belum++; });
   $('stats').innerHTML =
     '<div class="s"><b>'+stats.total+'</b><span>Item</span></div>'+
     '<div class="s"><b style="color:var(--ok)">'+stats.isi+'</b><span>Terisi</span></div>'+
     '<div class="s"><b style="color:var(--warn)">'+stats.belum+'</b><span>Belum</span></div>';
 
   var list=items;
-  if(state.filter==='belum') list=list.filter(function(it){return !isFilled(it);});
-  else if(state.filter==='isi') list=list.filter(isFilled);
+  if(state.filter==='belum') list=list.filter(function(it){return !stageFilled(it);});
+  else if(state.filter==='isi') list=list.filter(stageFilled);
 
   if(q){ var scored=list.map(function(it){return{it:it,s:score(it,q)};}).filter(function(x){return x.s>0;}); scored.sort(function(a,b){return b.s-a.s;}); list=scored.map(function(x){return x.it;}); }
 
@@ -388,9 +406,9 @@ function renderList(){
 }
 function itemHTML(it,q){
   var i=it._i;
-  var f=finalQty(it);
-  var badge = f==null ? '<span class="badge b-belum">Belum</span>'
-            : '<span class="badge b-isi">✓ '+f+'</span>';
+  // BUTA: badge tak menampilkan angka, hanya status tahap aktif (Terisi/Belum)
+  var badge = stageFilled(it) ? '<span class="badge b-isi">✓ Terisi</span>'
+            : '<span class="badge b-belum">Belum</span>';
   var sub=[it.brand,it.rack||it.penyimpanan,it.barcode].filter(Boolean).join(' · ');
   return '<div class="item" data-i="'+i+'">'+
     '<div style="min-width:0"><div class="nm">'+hl(esc(it.nama),q)+'</div><div class="sub">'+hl(esc(sub),q)+'</div></div>'+
@@ -432,31 +450,27 @@ var editing=null;
 function openEditor(it){
   editing=it;
   var hasBox=!!BOX_SHEETS[state.wh];
-  var f=finalQty(it);
+  var sd=stageDef();
   var sel=[
     ['Kategori',it.kategori],['Brand',it.brand],['Satuan',it.satuan],
     ['Penyimpanan',it.penyimpanan],['Rack',it.rack]
   ].map(function(k){return '<div class="kv"><span class="muted">'+k[0]+'</span><b>'+esc(String(k[1]||'-'))+'</b></div>';}).join('');
-  var boxHTML = hasBox ? qtyFieldHTML('Box','edBox',it.box) : '';
+  var boxHTML = hasBox ? qtyFieldHTML('Box (jumlah dus)','edBox',it.box) : '';
+  var pic=stagePic(it);
   $('edSheet').innerHTML=
     '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3><button class="btn ghost sm" id="edClose">✕</button></div>'+
-    '<div class="muted" style="font-size:12px;margin-top:-6px">'+esc(it.barcode||'(tanpa barcode)')+' · '+esc(state.wh)+'</div>'+
-    (it.petugas ? '<div class="muted" style="font-size:11.5px;margin-top:2px">✍️ terakhir: '+esc(it.petugas)+(it.waktu?' · '+esc(it.waktu):'')+'</div>' : '')+
+    '<div class="muted" style="font-size:12px;margin-top:-6px">'+esc(it.barcode||'(tanpa barcode)')+' · '+esc(state.wh)+' · <b>'+esc(sd.label)+'</b></div>'+
+    (pic ? '<div class="muted" style="font-size:11.5px;margin-top:2px">✍️ '+esc(sd.short)+' diisi oleh: '+esc(pic)+'</div>' : '')+
     '<div class="card" style="padding:10px;margin-top:6px">'+sel+'</div>'+
     boxHTML+
-    '<div class="grid2" style="margin-top:10px">'+
-      qtyFieldHTML('Qty Inisial','edQinit',it.qinit)+
-      qtyFieldHTML('Reconcile 1','edRec1',it.rec1)+
-      qtyFieldHTML('Reconcile 2','edRec2',it.rec2)+
-      qtyFieldHTML('Reconcile 3','edRec3',it.rec3)+
-    '</div>'+
-    '<div class="kv" style="margin-top:8px;font-size:14px"><span>Qty Hitung (terakhir terisi)</span><b id="edFinal">'+(f==null?'-':f)+'</b></div>'+
-    '<button class="btn" id="edSave" style="margin-top:12px">💾 Simpan</button>';
+    // BUTA: hanya satu field = tahap aktif; tak menampilkan tahap lain
+    '<div style="margin-top:10px">'+ qtyFieldHTML('Hitungan — '+sd.label,'edQty',stageVal(it)) +'</div>'+
+    '<button class="btn" id="edSave" style="margin-top:14px">💾 Simpan '+esc(sd.short)+'</button>';
   $('edBack').classList.remove('hidden');
   $('edClose').onclick=closeEditor;
   bindQty();
-  updateEdSummary();
   $('edSave').onclick=saveEditor;
+  setTimeout(function(){ var el=$('edQty'); if(el){ el.focus(); el.select&&el.select(); } },60);
 }
 function qtyFieldHTML(label,id,val){
   return '<div class="qtybox"><label>'+label+'</label><div class="qtyfield">'+
@@ -467,27 +481,19 @@ function qtyFieldHTML(label,id,val){
 function bindQty(){
   [].forEach.call($('edSheet').querySelectorAll('[data-inc]'),function(b){ b.onclick=function(){ step(b.dataset.inc,1); }; });
   [].forEach.call($('edSheet').querySelectorAll('[data-dec]'),function(b){ b.onclick=function(){ step(b.dataset.dec,-1); }; });
-  [].forEach.call($('edSheet').querySelectorAll('input[inputmode="numeric"]'),function(inp){ inp.oninput=updateEdSummary; });
 }
-function step(id,d){ var el=$(id); var n=(parseFloat(el.value)||0)+d; if(n<0)n=0; el.value=n; updateEdSummary(); }
+function step(id,d){ var el=$(id); var n=(parseFloat(el.value)||0)+d; if(n<0)n=0; el.value=n; }
 function edVal(id){ var el=$(id); if(!el)return null; return num(el.value); }
-function updateEdSummary(){
-  var seq=[edVal('edQinit'),edVal('edRec1'),edVal('edRec2'),edVal('edRec3')], f=null;
-  for(var i=0;i<seq.length;i++) if(seq[i]!=null) f=seq[i];
-  $('edFinal').textContent = f==null?'-':f;
-}
 function closeEditor(){ $('edBack').classList.add('hidden'); editing=null; focusScan(); }
 function saveEditor(){
-  var it=editing, hasBox=!!BOX_SHEETS[state.wh];
-  var upd={ box:hasBox?edVal('edBox'):null, qinit:edVal('edQinit'), rec1:edVal('edRec1'), rec2:edVal('edRec2'), rec3:edVal('edRec3') };
-  // optimistic
-  var prev={box:it.box,qinit:it.qinit,rec1:it.rec1,rec2:it.rec2,rec3:it.rec3,petugas:it.petugas,waktu:it.waktu};
-  it.box=upd.box; it.qinit=upd.qinit; it.rec1=upd.rec1; it.rec2=upd.rec2; it.rec3=upd.rec3;
-  it.petugas=state.user; it.waktu='baru saja';
-  closeEditor(); renderList(); toast('Tersimpan ✓','ok');
+  var it=editing, hasBox=!!BOX_SHEETS[state.wh], sd=stageDef();
+  var qty=edVal('edQty'), box=hasBox?edVal('edBox'):null;
+  // optimistic: tulis hanya tahap aktif + PIC tahap ini
+  var prev={}; prev[state.stage]=it[state.stage]; prev[sd.pic]=it[sd.pic]; prev.box=it.box;
+  it[state.stage]=qty; it[sd.pic]=state.user; if(hasBox) it.box=box;
+  closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
   postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, barcode:it.barcode, rowHint:it.row,
-    box:upd.box==null?'':upd.box, qinit:upd.qinit==null?'':upd.qinit,
-    rec1:upd.rec1==null?'':upd.rec1, rec2:upd.rec2==null?'':upd.rec2, rec3:upd.rec3==null?'':upd.rec3, pic:state.user
+    stage:state.stage, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
   }).then(function(j){ if(!j||!j.ok){ Object.assign(it,prev); renderList(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
    .catch(function(){ Object.assign(it,prev); renderList(); toast('Gagal simpan (koneksi)','err'); });
 }
@@ -514,7 +520,7 @@ $('miUser').onclick=function(){ $('menuBack').classList.add('hidden'); localStor
 $('miSettings').onclick=function(){ $('menuBack').classList.add('hidden'); $('inExec').value=state.exec; show('scSetup'); };
 $('btnUser').onclick=$('miUser').onclick;
 $('btnReload').onclick=function(){ if($('scList').classList.contains('hidden')) boot(); else loadSheet(); };
-function syncCtx(){ $('ctx').textContent=[state.user,state.sessionName,state.wh].filter(Boolean).join(' · '); }
+function syncCtx(){ $('ctx').textContent=[state.user,state.sessionName,state.wh,(state.wh?stageDef().short:'')].filter(Boolean).join(' · '); }
 
 // jaga fokus untuk scanner fisik
 document.addEventListener('click',function(e){
