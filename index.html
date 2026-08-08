@@ -189,11 +189,11 @@ var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
 // Tahap hitung (mode buta). field=kolom qty, pic=kolom PIC, tugas=kolom assignment, save=stage backend.
 // "Sweep" = menulis ke Qty Inisial (save qinit) tapi difilter kolom Tugas Sweep (utk item belum kehitung).
 var STAGES = [
-  {k:'qinit', short:'Inisial', label:'Qty Inisial',         field:'qinit', pic:'picInisial', tugas:null,         save:'qinit'},
-  {k:'sweep', short:'Sweep',   label:'Qty Inisial (Sweep)', field:'qinit', pic:'picInisial', tugas:'tugasSweep', save:'qinit'},
-  {k:'rec1',  short:'Rec 1',   label:'Reconcile 1',         field:'rec1',  pic:'picRec1',    tugas:'tugasRec1',  save:'rec1'},
-  {k:'rec2',  short:'Rec 2',   label:'Reconcile 2',         field:'rec2',  pic:'picRec2',    tugas:'tugasRec2',  save:'rec2'},
-  {k:'rec3',  short:'Rec 3',   label:'Reconcile 3',         field:'rec3',  pic:'picRec3',    tugas:'tugasRec3',  save:'rec3'}
+  {k:'qinit', short:'Inisial', label:'Qty Inisial',         field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:null,         save:'qinit'},
+  {k:'sweep', short:'Sweep',   label:'Qty Inisial (Sweep)', field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:'tugasSweep', save:'qinit'},
+  {k:'rec1',  short:'Rec 1',   label:'Reconcile 1',         field:'rec1',  pic:'picRec1',    waktu:'waktuRec1',    tugas:'tugasRec1',  save:'rec1'},
+  {k:'rec2',  short:'Rec 2',   label:'Reconcile 2',         field:'rec2',  pic:'picRec2',    waktu:'waktuRec2',    tugas:'tugasRec2',  save:'rec2'},
+  {k:'rec3',  short:'Rec 3',   label:'Reconcile 3',         field:'rec3',  pic:'picRec3',    waktu:'waktuRec3',    tugas:'tugasRec3',  save:'rec3'}
 ];
 function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.stage) return STAGES[i]; return STAGES[0]; }
 var state = {
@@ -380,7 +380,8 @@ function normItem(o){
     rec1:num(o['Reconcile 1']), rec2:num(o['Reconcile 2']), rec3:num(o['Reconcile 3']),
     picInisial:String(o['PIC Inisial']||''), picRec1:String(o['PIC Rec 1']||''),
     picRec2:String(o['PIC Rec 2']||''), picRec3:String(o['PIC Rec 3']||''),
-    waktu:String(o['Waktu']||''),
+    waktuInisial:String(o['Waktu Inisial']||''), waktuRec1:String(o['Waktu Rec 1']||''),
+    waktuRec2:String(o['Waktu Rec 2']||''), waktuRec3:String(o['Waktu Rec 3']||''),
     tugasSweep:String(o['Tugas Sweep']||''),
     tugasRec1:String(o['Tugas Rec 1']||''), tugasRec2:String(o['Tugas Rec 2']||''), tugasRec3:String(o['Tugas Rec 3']||'')
   };
@@ -473,11 +474,11 @@ function openEditor(it){
     ['Penyimpanan',it.penyimpanan],['Rack',it.rack]
   ].map(function(k){return '<div class="kv"><span class="muted">'+k[0]+'</span><b>'+esc(String(k[1]||'-'))+'</b></div>';}).join('');
   var boxHTML = hasBox ? qtyFieldHTML('Box (jumlah dus)','edBox',it.box) : '';
-  var pic=stagePic(it);
+  var pic=stagePic(it), wkt=it[sd.waktu]||'';
   $('edSheet').innerHTML=
     '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3><button class="btn ghost sm" id="edClose">✕</button></div>'+
     '<div class="muted" style="font-size:12px;margin-top:-6px">'+esc(it.barcode||'(tanpa barcode)')+' · '+esc(state.wh)+' · <b>'+esc(sd.label)+'</b></div>'+
-    (pic ? '<div class="muted" style="font-size:11.5px;margin-top:2px">✍️ '+esc(sd.short)+' diisi oleh: '+esc(pic)+'</div>' : '')+
+    (pic ? '<div class="muted" style="font-size:11.5px;margin-top:2px">✍️ '+esc(sd.short)+' diisi oleh: '+esc(pic)+(wkt?' · '+esc(wkt):'')+'</div>' : '')+
     '<div class="card" style="padding:10px;margin-top:6px">'+sel+'</div>'+
     boxHTML+
     // BUTA: hanya satu field = tahap aktif; tak menampilkan tahap lain
@@ -506,8 +507,8 @@ function saveEditor(){
   var it=editing, hasBox=!!BOX_SHEETS[state.wh], sd=stageDef();
   var qty=edVal('edQty'), box=hasBox?edVal('edBox'):null;
   // optimistic: tulis hanya tahap aktif + PIC tahap ini
-  var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev.box=it.box;
-  it[sd.field]=qty; it[sd.pic]=state.user; if(hasBox) it.box=box;
+  var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev[sd.waktu]=it[sd.waktu]; prev.box=it.box;
+  it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; if(hasBox) it.box=box;
   closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
   postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, barcode:it.barcode, rowHint:it.row,
     stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
