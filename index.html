@@ -181,21 +181,23 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
 // Kalau ganti deployment nanti, cukup ganti string di bawah (atau lewat menu ⚙️).
 var DEFAULT_EXEC = 'https://script.google.com/macros/s/AKfycbyACbDpID4aCx827l7_5Q_wB7Fowb8WN66aik_88mICT2E5EqZUIAf_jOmwttcCYhkg/exec';
 var LS = {
-  exec:'so_exec', theme:'so_theme', user:'so_user',
+  exec:'so_exec', theme:'so_theme', user:'so_user', admin:'so_admin',
   session:'so_session', wh:'so_wh', stage:'so_stage'
 };
 var WAREHOUSES = ['ETALASE','BULK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
-// Tahap hitung (mode buta): tiap tahap = 1 field qty + 1 kolom PIC di sheet
+// Tahap hitung (mode buta). field=kolom qty, pic=kolom PIC, tugas=kolom assignment, save=stage backend.
+// "Sweep" = menulis ke Qty Inisial (save qinit) tapi difilter kolom Tugas Sweep (utk item belum kehitung).
 var STAGES = [
-  {k:'qinit', short:'Inisial',   label:'Qty Inisial',  pic:'picInisial'},
-  {k:'rec1',  short:'Rec 1',     label:'Reconcile 1',  pic:'picRec1'},
-  {k:'rec2',  short:'Rec 2',     label:'Reconcile 2',  pic:'picRec2'},
-  {k:'rec3',  short:'Rec 3',     label:'Reconcile 3',  pic:'picRec3'}
+  {k:'qinit', short:'Inisial', label:'Qty Inisial',         field:'qinit', pic:'picInisial', tugas:null,         save:'qinit'},
+  {k:'sweep', short:'Sweep',   label:'Qty Inisial (Sweep)', field:'qinit', pic:'picInisial', tugas:'tugasSweep', save:'qinit'},
+  {k:'rec1',  short:'Rec 1',   label:'Reconcile 1',         field:'rec1',  pic:'picRec1',    tugas:'tugasRec1',  save:'rec1'},
+  {k:'rec2',  short:'Rec 2',   label:'Reconcile 2',         field:'rec2',  pic:'picRec2',    tugas:'tugasRec2',  save:'rec2'},
+  {k:'rec3',  short:'Rec 3',   label:'Reconcile 3',         field:'rec3',  pic:'picRec3',    tugas:'tugasRec3',  save:'rec3'}
 ];
 function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.stage) return STAGES[i]; return STAGES[0]; }
 var state = {
-  exec:'', user:'', pics:[], sessions:[],
+  exec:'', user:'', isAdmin:false, pics:[], sessions:[],
   sessionId:'', sessionName:'', wh:'', stage:'qinit', items:[], byBarcode:{}, byKode:{}, filter:'all', q:''
 };
 var scanner=null;
@@ -252,6 +254,7 @@ function boot(){
   state.exec = localStorage.getItem(LS.exec) || DEFAULT_EXEC || '';
   if(localStorage.getItem(LS.theme)==='dark') document.documentElement.classList.add('dark');
   state.user = localStorage.getItem(LS.user)||'';
+  state.isAdmin = localStorage.getItem(LS.admin)==='1';
   if(!state.exec){ show('scSetup'); return; }
   if(!state.user){ startLogin(); return; }
   startPick();
@@ -293,7 +296,8 @@ $('btnLogin').onclick=function(){
   if(!name){ $('loginMsg').textContent='Isi nama.'; return; }
   var p=state.pics.filter(function(x){return x.nama.toLowerCase()===name.toLowerCase();})[0];
   if(p&&p.pin){ if($('inPin').value.trim()!==String(p.pin)){ $('loginMsg').textContent='PIN salah.'; return; } }
-  state.user=name; localStorage.setItem(LS.user,name);
+  state.user=name; state.isAdmin = !!(p && /^admin$/i.test(p.role||''));
+  localStorage.setItem(LS.user,name); localStorage.setItem(LS.admin, state.isAdmin?'1':'0');
   startPick();
 };
 
@@ -376,21 +380,32 @@ function normItem(o){
     rec1:num(o['Reconcile 1']), rec2:num(o['Reconcile 2']), rec3:num(o['Reconcile 3']),
     picInisial:String(o['PIC Inisial']||''), picRec1:String(o['PIC Rec 1']||''),
     picRec2:String(o['PIC Rec 2']||''), picRec3:String(o['PIC Rec 3']||''),
-    waktu:String(o['Waktu']||'')
+    waktu:String(o['Waktu']||''),
+    tugasSweep:String(o['Tugas Sweep']||''),
+    tugasRec1:String(o['Tugas Rec 1']||''), tugasRec2:String(o['Tugas Rec 2']||''), tugasRec3:String(o['Tugas Rec 3']||'')
   };
 }
 // Nilai & status TAHAP AKTIF saja (mode buta — tak lihat tahap lain)
-function stageVal(it){ return it[state.stage]; }
+function stageVal(it){ return it[stageDef().field]; }
 function stageFilled(it){ return stageVal(it)!=null; }
 function stagePic(it){ return it[stageDef().pic]||''; }
+// Item ini tugas user login di tahap aktif? (Inisial=borongan; admin=semua; Rec=hanya yg ditugaskan)
+function assignedToMe(it){
+  var sd=stageDef();
+  if(!sd.tugas || state.isAdmin) return true;
+  var t=normKey(it[sd.tugas]||'');
+  return t!=='' && t===normKey(state.user);
+}
 
 /* ============ RENDER LIST ============ */
 function renderList(){
-  var items=state.items, q=state.q.trim();
+  var sd=stageDef(), assignedMode=(sd.tugas && !state.isAdmin);
+  var items=state.items.filter(assignedToMe);           // batasi ke tugas user (utk Rec)
+  var q=state.q.trim();
   var stats={total:items.length,isi:0,belum:0};
   items.forEach(function(it){ if(stageFilled(it))stats.isi++; else stats.belum++; });
   $('stats').innerHTML =
-    '<div class="s"><b>'+stats.total+'</b><span>Item</span></div>'+
+    '<div class="s"><b>'+stats.total+'</b><span>'+(assignedMode?'Tugasmu':'Item')+'</span></div>'+
     '<div class="s"><b style="color:var(--ok)">'+stats.isi+'</b><span>Terisi</span></div>'+
     '<div class="s"><b style="color:var(--warn)">'+stats.belum+'</b><span>Belum</span></div>';
 
@@ -400,8 +415,9 @@ function renderList(){
 
   if(q){ var scored=list.map(function(it){return{it:it,s:score(it,q)};}).filter(function(x){return x.s>0;}); scored.sort(function(a,b){return b.s-a.s;}); list=scored.map(function(x){return x.it;}); }
 
+  var empty = assignedMode ? 'Belum ada item yang ditugaskan ke kamu untuk '+esc(sd.short)+'.' : 'Tidak ada item.';
   var html=list.slice(0,400).map(function(it){ return itemHTML(it,q); }).join('');
-  $('listCard').innerHTML = html || '<div style="padding:20px" class="muted">Tidak ada item.</div>';
+  $('listCard').innerHTML = html || '<div style="padding:20px" class="muted">'+empty+'</div>';
   [].forEach.call($('listCard').querySelectorAll('.item'),function(el){ el.onclick=function(){ openEditor(state.items[+el.dataset.i]); }; });
 }
 function itemHTML(it,q){
@@ -440,6 +456,7 @@ function handleScan(code){
   if(!code) return;
   var k=normKey(code);
   var hit=state.byBarcode[k] || state.byKode[k];        // O(1) via index
+  if(hit && !assignedToMe(hit)){ beep('warn'); toast('Bukan tugasmu untuk '+stageDef().short,'warn'); return; }
   if(hit){ beep('ok'); $('inSearch').value=''; state.q=''; renderList(); openEditor(hit); }
   else{ beep('warn'); state.q=code; $('inSearch').value=code; renderList(); toast('Barcode tak ada — cari manual','warn'); }
 }
@@ -489,11 +506,11 @@ function saveEditor(){
   var it=editing, hasBox=!!BOX_SHEETS[state.wh], sd=stageDef();
   var qty=edVal('edQty'), box=hasBox?edVal('edBox'):null;
   // optimistic: tulis hanya tahap aktif + PIC tahap ini
-  var prev={}; prev[state.stage]=it[state.stage]; prev[sd.pic]=it[sd.pic]; prev.box=it.box;
-  it[state.stage]=qty; it[sd.pic]=state.user; if(hasBox) it.box=box;
+  var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev.box=it.box;
+  it[sd.field]=qty; it[sd.pic]=state.user; if(hasBox) it.box=box;
   closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
   postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, barcode:it.barcode, rowHint:it.row,
-    stage:state.stage, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
+    stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
   }).then(function(j){ if(!j||!j.ok){ Object.assign(it,prev); renderList(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
    .catch(function(){ Object.assign(it,prev); renderList(); toast('Gagal simpan (koneksi)','err'); });
 }
@@ -516,7 +533,7 @@ $('btnMenu').onclick=function(){ $('miAbout').textContent='v3 · '+(state.exec?'
 $('menuClose').onclick=function(){ $('menuBack').classList.add('hidden'); };
 $('miTheme').onclick=function(){ var d=document.documentElement.classList.toggle('dark'); localStorage.setItem(LS.theme,d?'dark':'light'); };
 $('miPick').onclick=function(){ $('menuBack').classList.add('hidden'); startPick(); };
-$('miUser').onclick=function(){ $('menuBack').classList.add('hidden'); localStorage.removeItem(LS.user); state.user=''; startLogin(); };
+$('miUser').onclick=function(){ $('menuBack').classList.add('hidden'); localStorage.removeItem(LS.user); localStorage.removeItem(LS.admin); state.user=''; state.isAdmin=false; startLogin(); };
 $('miSettings').onclick=function(){ $('menuBack').classList.add('hidden'); $('inExec').value=state.exec; show('scSetup'); };
 $('btnUser').onclick=$('miUser').onclick;
 $('btnReload').onclick=function(){ if($('scList').classList.contains('hidden')) boot(); else loadSheet(); };
