@@ -510,7 +510,7 @@ function saveEditor(){
   var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev[sd.waktu]=it[sd.waktu]; prev.box=it.box;
   it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; if(hasBox) it.box=box;
   closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
-  postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, barcode:it.barcode, rowHint:it.row,
+  postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, nama:it.nama, barcode:it.barcode, rowHint:it.row,
     stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
   }).then(function(j){ if(!j||!j.ok){ Object.assign(it,prev); renderList(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
    .catch(function(){ Object.assign(it,prev); renderList(); toast('Gagal simpan (koneksi)','err'); });
