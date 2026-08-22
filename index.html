@@ -133,7 +133,7 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
     <div class="stat" id="stats"></div>
     <div class="searchbar">
       <div class="scanrow">
-        <input id="inSearch" placeholder="🔍 Scan / ketik barcode atau nama…" autocomplete="off">
+        <input id="inSearch" placeholder="🔍 Scan / ketik Kode atau nama…" autocomplete="off">
         <button class="btn sm" id="btnCam" title="Kamera">📷</button>
       </div>
       <div class="chips" style="margin-top:8px" id="filterChips">
@@ -152,10 +152,15 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
   <div class="sheet stack" id="edSheet"></div>
 </div>
 
+<!-- CHOOSER (kode ganda) -->
+<div id="chooseBack" class="backdrop hidden">
+  <div class="sheet stack" id="chooseSheet"></div>
+</div>
+
 <!-- CAMERA -->
 <div id="camBack" class="backdrop hidden">
   <div class="sheet stack">
-    <div class="row"><h3 style="margin:0;flex:1">Scan Barcode</h3><button class="btn ghost sm" id="camClose">Tutup</button></div>
+    <div class="row"><h3 style="margin:0;flex:1">Scan Kode</h3><button class="btn ghost sm" id="camClose">Tutup</button></div>
     <div id="reader"></div>
   </div>
 </div>
@@ -198,7 +203,7 @@ var STAGES = [
 function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.stage) return STAGES[i]; return STAGES[0]; }
 var state = {
   exec:'', user:'', isAdmin:false, pics:[], sessions:[],
-  sessionId:'', sessionName:'', wh:'', stage:'qinit', items:[], byBarcode:{}, byKode:{}, filter:'all', q:''
+  sessionId:'', sessionName:'', wh:'', stage:'qinit', items:[], byKode:{}, filter:'all', q:''
 };
 var scanner=null;
 
@@ -340,16 +345,15 @@ $('btnStart').onclick=function(){
 function cacheKey(){ return state.sessionId+'|'+state.wh; }
 function cacheRead(){ try{ var c=JSON.parse(localStorage.getItem('so_cache')||'null'); return (c&&c.k===cacheKey())?c.items:null; }catch(e){ return null; } }
 function cacheWrite(){ try{ localStorage.setItem('so_cache', JSON.stringify({k:cacheKey(), items:state.items})); }catch(e){} }
-// Bangun index sekali: posisi, string cari (lowercase), peta barcode & kode -> O(1) scan
+// Bangun index sekali: posisi, string cari (lowercase), peta Kode -> daftar item (utk scan + chooser)
 function indexItems(){
-  state.byBarcode={}; state.byKode={};
+  state.byKode={};                                   // kode -> [item, ...] (bisa >1 = kode ganda)
   var items=state.items;
   for(var i=0;i<items.length;i++){
     var it=items[i]; it._i=i;
-    it._hay=(it.nama+' '+it.brand+' '+it.kategori+' '+it.barcode+' '+it.kode+' '+it.rack).toLowerCase();
-    it._bc=normKey(it.barcode); it._kd=normKey(it.kode);
-    if(it._bc && !state.byBarcode[it._bc]) state.byBarcode[it._bc]=it;
-    if(it._kd && !state.byKode[it._kd]) state.byKode[it._kd]=it;
+    it._hay=(it.nama+' '+it.brand+' '+it.kategori+' '+it.kode).toLowerCase();
+    it._kd=normKey(it.kode);
+    if(it._kd){ (state.byKode[it._kd]=state.byKode[it._kd]||[]).push(it); }
   }
 }
 function setItems(rows){ state.items=rows.map(normItem); indexItems(); }
@@ -372,9 +376,8 @@ function loadSheet(){
 }
 function normItem(o){
   return {
-    row:o._row, kode:String(o['Kode Barang']||''), barcode:String(o['Barcode']||''), nama:String(o['Nama Barang']||''),
+    row:o._row, kode:String(o['Kode Barang']||''), nama:String(o['Nama Barang']||''),
     kategori:String(o['Kategori']||''), brand:String(o['Brand Owner']||''), satuan:String(o['Nama Satuan']||''),
-    penyimpanan:String(o['Penyimpanan']||''), rack:String(o['Nama Rack']||''),
     sistem:num(o['Qty Sistem']),
     box:num(o['Box']), qinit:num(o['Qty Inisial']),
     rec1:num(o['Reconcile 1']), rec2:num(o['Reconcile 2']), rec3:num(o['Reconcile 3']),
@@ -426,7 +429,7 @@ function itemHTML(it,q){
   // BUTA: badge tak menampilkan angka, hanya status tahap aktif (Terisi/Belum)
   var badge = stageFilled(it) ? '<span class="badge b-isi">✓ Terisi</span>'
             : '<span class="badge b-belum">Belum</span>';
-  var sub=[it.brand,it.rack||it.penyimpanan,it.barcode].filter(Boolean).join(' · ');
+  var sub=[it.brand,it.kode].filter(Boolean).join(' · ');
   return '<div class="item" data-i="'+i+'">'+
     '<div style="min-width:0"><div class="nm">'+hl(esc(it.nama),q)+'</div><div class="sub">'+hl(esc(sub),q)+'</div></div>'+
     '<div class="rt">'+badge+'</div></div>';
@@ -434,9 +437,9 @@ function itemHTML(it,q){
 function score(it,q){
   var ql=q.toLowerCase();
   var hay=it._hay||'';                                  // string cari sudah dipracompute
-  var bc=it.barcode?it.barcode.toLowerCase():'';
-  if(bc && bc===ql) return 1000;
-  if(bc && bc.indexOf(ql)===0) return 500;
+  var kd=it.kode?it.kode.toLowerCase():'';
+  if(kd && kd===ql) return 1000;
+  if(kd && kd.indexOf(ql)===0) return 500;
   var t=ql.split(/\s+/); var s=0;
   for(var i=0;i<t.length;i++){ if(!t[i])continue; var p=hay.indexOf(t[i]); if(p<0)return 0; s+=(p===0?30:hay[p-1]===' '?20:10)-Math.min(p,15)*0.2; }
   return s;
@@ -456,10 +459,31 @@ $('inSearch').addEventListener('keydown',function(e){
 function handleScan(code){
   if(!code) return;
   var k=normKey(code);
-  var hit=state.byBarcode[k] || state.byKode[k];        // O(1) via index
-  if(hit && !assignedToMe(hit)){ beep('warn'); toast('Bukan tugasmu untuk '+stageDef().short,'warn'); return; }
-  if(hit){ beep('ok'); $('inSearch').value=''; state.q=''; renderList(); openEditor(hit); }
-  else{ beep('warn'); state.q=code; $('inSearch').value=code; renderList(); toast('Barcode tak ada — cari manual','warn'); }
+  var all=state.byKode[k]||[];                          // semua item dgn Kode ini
+  var mine=all.filter(assignedToMe);                    // yg jadi tugas user di tahap aktif
+  if(!mine.length){
+    if(all.length){ beep('warn'); toast('Bukan tugasmu untuk '+stageDef().short,'warn'); }
+    else { beep('warn'); state.q=code; $('inSearch').value=code; renderList(); toast('Kode tak ada — cari manual','warn'); }
+    return;
+  }
+  if(mine.length===1){ beep('ok'); $('inSearch').value=''; state.q=''; renderList(); openEditor(mine[0]); return; }
+  beep('ok'); showChooser(mine);                        // kode dipakai >1 barang -> popup pilih
+}
+// Popup pilih barang saat 1 Kode dipakai >1 barang berstok (kode ganda)
+function showChooser(arr){
+  var html='<div class="row"><h3 style="flex:1">Pilih barang</h3><button class="btn ghost sm" id="chClose">✕</button></div>'+
+    '<div class="muted" style="font-size:12px;margin-top:-6px">Kode <b>'+esc(arr[0].kode)+'</b> dipakai '+arr.length+' barang. Pilih yang di tanganmu:</div>'+
+    '<div class="card" style="margin-top:8px">'+arr.map(function(it){
+      return '<div class="item" data-i="'+it._i+'"><div style="min-width:0"><div class="nm">'+esc(it.nama)+'</div>'+
+        '<div class="sub">'+esc([it.brand,it.satuan].filter(Boolean).join(' · '))+'</div></div>'+
+        '<div class="rt">'+(stageFilled(it)?'<span class="badge b-isi">✓ Terisi</span>':'<span class="badge b-belum">Belum</span>')+'</div></div>';
+    }).join('')+'</div>';
+  $('chooseSheet').innerHTML=html;
+  $('chooseBack').classList.remove('hidden');
+  $('chClose').onclick=function(){ $('chooseBack').classList.add('hidden'); focusScan(); };
+  [].forEach.call($('chooseSheet').querySelectorAll('.item'),function(el){
+    el.onclick=function(){ $('chooseBack').classList.add('hidden'); $('inSearch').value=''; state.q=''; renderList(); openEditor(state.items[+el.dataset.i]); };
+  });
 }
 function focusScan(){ setTimeout(function(){ var el=$('inSearch'); if(el&&!document.querySelector('.backdrop:not(.hidden)')) el.focus(); },200); }
 
@@ -470,14 +494,13 @@ function openEditor(it){
   var hasBox=!!BOX_SHEETS[state.wh];
   var sd=stageDef();
   var sel=[
-    ['Kategori',it.kategori],['Brand',it.brand],['Satuan',it.satuan],
-    ['Penyimpanan',it.penyimpanan],['Rack',it.rack]
+    ['Kategori',it.kategori],['Brand',it.brand],['Satuan',it.satuan]
   ].map(function(k){return '<div class="kv"><span class="muted">'+k[0]+'</span><b>'+esc(String(k[1]||'-'))+'</b></div>';}).join('');
   var boxHTML = hasBox ? qtyFieldHTML('Box (jumlah dus)','edBox',it.box) : '';
   var pic=stagePic(it), wkt=it[sd.waktu]||'';
   $('edSheet').innerHTML=
     '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3><button class="btn ghost sm" id="edClose">✕</button></div>'+
-    '<div class="muted" style="font-size:12px;margin-top:-6px">'+esc(it.barcode||'(tanpa barcode)')+' · '+esc(state.wh)+' · <b>'+esc(sd.label)+'</b></div>'+
+    '<div class="muted" style="font-size:12px;margin-top:-6px">Kode: '+esc(it.kode||'-')+' · '+esc(state.wh)+' · <b>'+esc(sd.label)+'</b></div>'+
     (pic ? '<div class="muted" style="font-size:11.5px;margin-top:2px">✍️ '+esc(sd.short)+' diisi oleh: '+esc(pic)+(wkt?' · '+esc(wkt):'')+'</div>' : '')+
     '<div class="card" style="padding:10px;margin-top:6px">'+sel+'</div>'+
     boxHTML+
@@ -510,7 +533,7 @@ function saveEditor(){
   var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev[sd.waktu]=it[sd.waktu]; prev.box=it.box;
   it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; if(hasBox) it.box=box;
   closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
-  postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, nama:it.nama, barcode:it.barcode, rowHint:it.row,
+  postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, nama:it.nama, rowHint:it.row,
     stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
   }).then(function(j){ if(!j||!j.ok){ Object.assign(it,prev); renderList(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
    .catch(function(){ Object.assign(it,prev); renderList(); toast('Gagal simpan (koneksi)','err'); });
