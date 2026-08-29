@@ -133,7 +133,8 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
     <div class="stat" id="stats"></div>
     <div class="searchbar">
       <div class="scanrow">
-        <input id="inSearch" placeholder="🔍 Scan / ketik Kode atau nama…" autocomplete="off">
+        <input id="inSearch" placeholder="🔍 Scan Kode…" autocomplete="off" inputmode="none">
+        <button class="btn sm ghost" id="btnKbd" title="Ketik manual">⌨️</button>
         <button class="btn sm" id="btnCam" title="Kamera">📷</button>
       </div>
       <div class="chips" style="margin-top:8px" id="filterChips">
@@ -451,8 +452,10 @@ $('inSearch').addEventListener('input',function(){
   _searchT=setTimeout(function(){ state.q=v; renderList(); }, 110);   // debounce biar mulus di HP
 });
 $('inSearch').addEventListener('keydown',function(e){
-  if(e.key==='Enter'){ e.preventDefault(); clearTimeout(_searchT); handleScan(this.value.trim()); }
+  if(e.key==='Enter'){ e.preventDefault(); clearTimeout(_searchT); var el=this; handleScan(el.value.trim()); el.setAttribute('inputmode','none'); }
 });
+// ⌨️ = munculkan keyboard sesaat utk ketik manual (default keyboard OFF supaya scan tak memunculkannya)
+$('btnKbd').onclick=function(){ var el=$('inSearch'); el.setAttribute('inputmode','text'); el.blur(); el.focus(); };
 [].forEach.call($('filterChips').children,function(c){ c.onclick=function(){ [].forEach.call($('filterChips').children,function(x){x.classList.remove('on');}); c.classList.add('on'); state.filter=c.dataset.f; renderList(); }; });
 
 function handleScan(code){
@@ -585,16 +588,31 @@ function bulkTotalMap(){
 }
 function koliFor(it){ var k=normKey(it.kode), n=normKey(it.nama);
   return state.bulk.koli.filter(function(r){ return normKey(r.kode)===k && normKey(r.nama)===n; }); }
+// Pemilih rak: <select> semua rak (kelihatan semua) + opsi "ketik manual". Hindari filter datalist.
+function rackPickHTML(selId,manId,current){
+  var inList=false, cur=(current==null?'':String(current));
+  var opts='<option value="">— pilih rak —</option>'+
+    state.bulk.racks.map(function(r){ var s=(String(r)===cur); if(s)inList=true; return '<option value="'+esc(r)+'"'+(s?' selected':'')+'>'+esc(r)+'</option>'; }).join('')+
+    '<option value="__type__"'+((cur&&!inList)?' selected':'')+'>✎ ketik manual…</option>';
+  var stIn='width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)';
+  return '<select id="'+selId+'" style="'+stIn+'">'+opts+'</select>'+
+    '<input id="'+manId+'" class="'+((cur&&!inList)?'':'hidden')+'" value="'+esc(cur&&!inList?cur:'')+'" placeholder="ketik kode rak" style="margin-top:6px;'+stIn+'">';
+}
+function bindRackPick(selId,manId,onset){
+  var sel=$(selId), man=$(manId); if(!sel) return;
+  sel.onchange=function(){ if(sel.value==='__type__'){ if(man){ man.classList.remove('hidden'); man.focus(); } }
+    else { if(man){ man.classList.add('hidden'); man.value=''; } if(onset) onset((sel.value||'').trim()); } };
+  if(man) man.oninput=function(){ if(onset) onset((man.value||'').trim()); };
+}
+function getRackVal(selId,manId){ var sel=$(selId), man=$(manId); if(!sel) return '';
+  if(sel.value==='__type__') return man?(man.value||'').trim():''; return (sel.value||'').trim(); }
 function renderBulk(){
   var q=state.q.trim(), map=bulkTotalMap();
   var counted=0,totKoli=state.bulk.koli.length,totDus=0;
   for(var kk in map){ if(map.hasOwnProperty(kk)){ counted++; totDus+=map[kk].dus; } }
-  var opts=state.bulk.racks.map(function(r){ return '<option value="'+esc(r)+'">'; }).join('');
   $('stats').innerHTML=
-    '<div style="flex:1;min-width:150px"><label style="font-size:11px" class="muted">Rak aktif</label>'+
-      '<input id="bulkRak" list="rakDL" value="'+esc(state.bulk.rack||'')+'" placeholder="pilih / ketik rak" '+
-      'style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)">'+
-      '<datalist id="rakDL">'+opts+'</datalist>'+
+    '<div style="flex:1;min-width:170px"><label style="font-size:11px" class="muted">Rak aktif</label>'+
+      rackPickHTML('bulkRakSel','bulkRakMan',state.bulk.rack)+
       '<div class="chips" style="margin-top:6px">'+
         '<span class="chip'+(state.bulk.mode==='type'?' on':'')+'" data-bm="type">⌨️ Ketik jumlah</span>'+
         '<span class="chip'+(state.bulk.mode==='scan'?' on':'')+'" data-bm="scan">📷 Scan +1 dus</span>'+
@@ -602,14 +620,17 @@ function renderBulk(){
     '<div class="s"><b>'+counted+'</b><span>SKU</span></div>'+
     '<div class="s"><b>'+totKoli+'</b><span>Koli</span></div>'+
     '<div class="s"><b>'+totDus+'</b><span>Dus</span></div>';
-  var rk=$('bulkRak'); if(rk){ rk.onchange=function(){ state.bulk.rack=(this.value||'').trim(); try{localStorage.setItem(LS.rack,state.bulk.rack);}catch(e){} }; }
+  bindRackPick('bulkRakSel','bulkRakMan',function(v){ state.bulk.rack=v; try{localStorage.setItem(LS.rack,v);}catch(e){} });
   [].forEach.call($('stats').querySelectorAll('[data-bm]'),function(b){ b.onclick=function(){ state.bulk.mode=b.dataset.bm; try{localStorage.setItem(LS.bmode,state.bulk.mode);}catch(e){} renderBulk(); focusScan(); }; });
   var list=state.items;
   if(state.filter==='belum') list=list.filter(function(it){ return !map[normKey(it.kode)+'|'+normKey(it.nama)]; });
   else if(state.filter==='isi') list=list.filter(function(it){ return !!map[normKey(it.kode)+'|'+normKey(it.nama)]; });
   if(q){ var sc=list.map(function(it){return{it:it,s:score(it,q)};}).filter(function(x){return x.s>0;}); sc.sort(function(a,b){return b.s-a.s;}); list=sc.map(function(x){return x.it;}); }
   var html=list.slice(0,400).map(function(it){ return bulkItemHTML(it,q,map); }).join('');
-  $('listCard').innerHTML = html || '<div style="padding:20px" class="muted">Tidak ada item.</div>';
+  var undoHTML = (_lastKoliAdd && state.bulk.mode==='scan')
+    ? '<div style="padding:8px;border-bottom:1px solid var(--line)"><button class="btn ghost sm" id="btnUndoKoli" style="width:100%">↩️ Batalkan scan terakhir: '+esc(String(_lastKoliAdd.nama||'')).slice(0,22)+'</button></div>' : '';
+  $('listCard').innerHTML = undoHTML + (html || '<div style="padding:20px" class="muted">Tidak ada item.</div>');
+  var ub=$('btnUndoKoli'); if(ub) ub.onclick=undoLastKoli;
   [].forEach.call($('listCard').querySelectorAll('.item'),function(el){ el.onclick=function(){ openBulkEditor(state.items[+el.dataset.i]); }; });
 }
 function bulkItemHTML(it,q,map){
@@ -625,7 +646,6 @@ var editKoliId=null;
 function renderBulkEditor(){
   var it=editing, lines=koliFor(it), tdus=0,tpcs=0;
   lines.forEach(function(r){ tdus+=(+r.dus||0); tpcs+=(+r.subtotal||0); });
-  var opts=state.bulk.racks.map(function(r){ return '<option value="'+esc(r)+'">'; }).join('');
   var isiNote=(it.isi!=null&&it.isi!=='')?'auto dari data':'tak ada di data — isi manual';
   var vRak = editKoliId?(_bkEdit&&_bkEdit.rak||''):(state.bulk.rack||'');
   var vIsi = editKoliId?(_bkEdit&&_bkEdit.isi):(it.isi==null?'':it.isi);
@@ -640,8 +660,7 @@ function renderBulkEditor(){
     '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3><button class="btn ghost sm" id="edClose">✕</button></div>'+
     '<div class="muted" style="font-size:12px;margin-top:-6px">Kode: '+esc(it.kode||'-')+' · '+esc(it.brand||'')+' · <b>BULK (koli)</b></div>'+
     '<div class="card" style="padding:10px;margin-top:6px"><label style="font-size:11px" class="muted">Rak</label>'+
-      '<input id="bkRak" list="bkRakDL" value="'+esc(vRak)+'" placeholder="pilih / ketik rak" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)">'+
-      '<datalist id="bkRakDL">'+opts+'</datalist></div>'+
+      rackPickHTML('bkRakSel','bkRakMan',vRak)+'</div>'+
     '<div class="qtybox" style="margin-top:8px"><label>Isi per Dus ('+isiNote+')</label><div class="qtyfield">'+
       '<button data-dec="bkIsi">−</button><input id="bkIsi" inputmode="numeric" value="'+(vIsi==null?'':vIsi)+'"><button data-inc="bkIsi">＋</button></div></div>'+
     qtyFieldHTML('Jumlah Dus','bkDus',vDus)+
@@ -651,6 +670,7 @@ function renderBulkEditor(){
     '<div class="card" style="margin-top:6px">'+linesHTML+'</div>';
   $('edClose').onclick=closeBulkEditor;
   bindQty();
+  bindRackPick('bkRakSel','bkRakMan',null);
   $('bkAdd').onclick=addKoli;
   var bc=$('bkCancel'); if(bc) bc.onclick=function(){ editKoliId=null; _bkEdit=null; renderBulkEditor(); };
   [].forEach.call($('edSheet').querySelectorAll('[data-ek]'),function(b){ b.onclick=function(){ startEditKoli(b.dataset.ek); }; });
@@ -662,8 +682,8 @@ function startEditKoli(id){
 }
 function addKoli(){
   var it=editing;
-  var rak=($('bkRak').value||'').trim(), isi=num($('bkIsi').value), dus=num($('bkDus').value);
-  if(!rak){ toast('Set rak dulu.','warn'); $('bkRak').focus(); return; }
+  var rak=getRackVal('bkRakSel','bkRakMan'), isi=num($('bkIsi').value), dus=num($('bkDus').value);
+  if(!rak){ toast('Set rak dulu.','warn'); var rs=$('bkRakSel'); if(rs) rs.focus(); return; }
   if(dus==null||!(dus>0)){ toast('Jumlah dus harus > 0.','warn'); $('bkDus').focus(); return; }
   if(isi==null||!(isi>0)){ toast('Isi per dus harus > 0.','warn'); $('bkIsi').focus(); return; }
   state.bulk.rack=rak; try{localStorage.setItem(LS.rack,rak);}catch(e){}
@@ -692,24 +712,45 @@ function closeBulkEditor(){ $('edBack').classList.add('hidden'); editing=null; e
 
 // Saat SCAN: mode 'scan' -> +1 dus langsung; selain itu (atau non-bulk) buka editor.
 function bulkPick(it){ if(isBulk() && state.bulk.mode==='scan') return quickAddKoli(it); return openEditor(it); }
+var _lastQuick=null;     // guard double-read: {key, t}
+var _lastKoliAdd=null;   // utk Undo: {id,isNew,prevDus,prevSub,kode,nama,isi,rak,dus}
 // Mode B: tiap scan menambah 1 dus ke baris (SKU + rak aktif). Isi/dus auto dari data.
 function quickAddKoli(it){
   var rak=(state.bulk.rack||'').trim();
-  if(!rak){ toast('Set Rak aktif dulu (mode Scan +1).','warn'); var rk=$('bulkRak'); if(rk) rk.focus(); return; }
+  if(!rak){ toast('Set Rak aktif dulu (mode Scan +1).','warn'); var rk=$('bulkRakSel'); if(rk) rk.focus(); return; }
   var isi=it.isi;
   if(isi==null||!(isi>0)){ toast('Isi/dus SKU ini belum ada di data — buka & isi manual.','warn'); return openBulkEditor(it); }
+  // GUARD double-read: kode+nama+rak sama dalam <300ms diabaikan (1 scan kebaca 2x)
+  var gk=normKey(it.kode)+'|'+normKey(it.nama)+'|'+normKey(rak), now=(new Date()).getTime();
+  if(_lastQuick && _lastQuick.key===gk && (now-_lastQuick.t)<300){ return; }
+  _lastQuick={key:gk, t:now};
   var k=normKey(it.kode), n=normKey(it.nama), rr=normKey(rak), line=null;
   for(var i=0;i<state.bulk.koli.length;i++){ var r=state.bulk.koli[i]; if(normKey(r.kode)===k&&normKey(r.nama)===n&&normKey(r.rak)===rr){ line=r; break; } }
   var id,dus,isNew=false,prevDus=null,prevSub=null;
   if(line){ id=line.id; prevDus=line.dus; prevSub=line.subtotal; dus=(+line.dus||0)+1; line.dus=dus; line.subtotal=isi*dus; }
   else { isNew=true; id='K'+(new Date().getTime())+'-'+Math.floor(Math.random()*100000); dus=1; line={id:id,kode:it.kode,nama:it.nama,rak:rak,isi:isi,dus:1,subtotal:isi,pic:state.user}; state.bulk.koli.push(line); }
+  _lastKoliAdd={ id:id, isNew:isNew, prevDus:prevDus, prevSub:prevSub, kode:it.kode, nama:it.nama, isi:isi, rak:rak, dus:dus };
   renderBulk();
   toast(esc(it.nama).slice(0,20)+' +1 → '+dus+' dus @ '+rak,'ok');
   function rollback(){ if(isNew){ state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(id);}); }
-    else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } } renderBulk(); }
+    else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } } _lastKoliAdd=null; renderBulk(); }
   postExec({ action:'bulksave', id:state.sessionId, koliId:id, kode:it.kode, nama:it.nama, rak:rak, isi:isi, dus:dus, pic:state.user })
     .then(function(j){ if(!j||!j.ok){ rollback(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
     .catch(function(){ rollback(); toast('Gagal simpan (koneksi)','err'); });
+}
+// Undo scan +1 terakhir (mode B)
+function undoLastKoli(){
+  var la=_lastKoliAdd; if(!la){ return; }
+  _lastKoliAdd=null; _lastQuick=null;
+  if(la.isNew){
+    state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(la.id);}); renderBulk();
+    toast('Dibatalkan: '+esc(la.nama).slice(0,18),'warn');
+    postExec({ action:'bulkdel', id:state.sessionId, koliId:la.id }).catch(function(){});
+  } else {
+    for(var i=0;i<state.bulk.koli.length;i++){ if(String(state.bulk.koli[i].id)===String(la.id)){ state.bulk.koli[i].dus=la.prevDus; state.bulk.koli[i].subtotal=la.prevSub; break; } }
+    renderBulk(); toast('Dibatalkan: '+esc(la.nama).slice(0,18)+' → '+la.prevDus+' dus','warn');
+    postExec({ action:'bulksave', id:state.sessionId, koliId:la.id, kode:la.kode, nama:la.nama, rak:la.rak, isi:la.isi, dus:la.prevDus, pic:state.user }).catch(function(){});
+  }
 }
 
 /* ============ KAMERA ============ */
