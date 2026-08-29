@@ -192,13 +192,10 @@ var LS = {
 var WAREHOUSES = ['ETALASE','BULK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
 // Tahap hitung (mode buta). field=kolom qty, pic=kolom PIC, tugas=kolom assignment, save=stage backend.
-// "Sweep" = menulis ke Qty Inisial (save qinit) tapi difilter kolom Tugas Sweep (utk item belum kehitung).
+// 2 tahap: Inisial (borongan) & Reconcile (difilter kolom Tugas Rec 1 yg diisi manual/dropdown).
 var STAGES = [
-  {k:'qinit', short:'Inisial', label:'Qty Inisial',         field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:null,         save:'qinit'},
-  {k:'sweep', short:'Sweep',   label:'Qty Inisial (Sweep)', field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:'tugasSweep', save:'qinit'},
-  {k:'rec1',  short:'Rec 1',   label:'Reconcile 1',         field:'rec1',  pic:'picRec1',    waktu:'waktuRec1',    tugas:'tugasRec1',  save:'rec1'},
-  {k:'rec2',  short:'Rec 2',   label:'Reconcile 2',         field:'rec2',  pic:'picRec2',    waktu:'waktuRec2',    tugas:'tugasRec2',  save:'rec2'},
-  {k:'rec3',  short:'Rec 3',   label:'Reconcile 3',         field:'rec3',  pic:'picRec3',    waktu:'waktuRec3',    tugas:'tugasRec3',  save:'rec3'}
+  {k:'qinit', short:'Inisial',   label:'Qty Inisial', field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:null,        save:'qinit'},
+  {k:'rec1',  short:'Reconcile', label:'Reconcile',   field:'rec1',  pic:'picRec1',    waktu:'waktuRec1',    tugas:'tugasRec1', save:'rec1'}
 ];
 function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.stage) return STAGES[i]; return STAGES[0]; }
 var state = {
@@ -380,13 +377,10 @@ function normItem(o){
     kategori:String(o['Kategori']||''), brand:String(o['Brand Owner']||''), satuan:String(o['Nama Satuan']||''),
     sistem:num(o['Qty Sistem']),
     box:num(o['Box']), qinit:num(o['Qty Inisial']),
-    rec1:num(o['Reconcile 1']), rec2:num(o['Reconcile 2']), rec3:num(o['Reconcile 3']),
+    rec1:num(o['Reconcile 1']),
     picInisial:String(o['PIC Inisial']||''), picRec1:String(o['PIC Rec 1']||''),
-    picRec2:String(o['PIC Rec 2']||''), picRec3:String(o['PIC Rec 3']||''),
     waktuInisial:String(o['Waktu Inisial']||''), waktuRec1:String(o['Waktu Rec 1']||''),
-    waktuRec2:String(o['Waktu Rec 2']||''), waktuRec3:String(o['Waktu Rec 3']||''),
-    tugasSweep:String(o['Tugas Sweep']||''),
-    tugasRec1:String(o['Tugas Rec 1']||''), tugasRec2:String(o['Tugas Rec 2']||''), tugasRec3:String(o['Tugas Rec 3']||'')
+    tugasRec1:String(o['Tugas Rec 1']||'')
   };
 }
 // Nilai & status TAHAP AKTIF saja (mode buta — tak lihat tahap lain)
@@ -529,14 +523,37 @@ function closeEditor(){ $('edBack').classList.add('hidden'); editing=null; focus
 function saveEditor(){
   var it=editing, hasBox=!!BOX_SHEETS[state.wh], sd=stageDef();
   var qty=edVal('edQty'), box=hasBox?edVal('edBox'):null;
+  // PREVENTIF ANTI-HILANG: jangan simpan qty kosong (bisa mencoret nilai yg sudah ada). Isi 0 kalau memang nol stok.
+  if(qty==null){ toast('Isi angka dulu (ketik 0 kalau stok nol). Simpan kosong ditolak agar data tak hilang.','warn'); var eq=$('edQty'); if(eq) eq.focus(); return; }
   // optimistic: tulis hanya tahap aktif + PIC tahap ini
   var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev[sd.waktu]=it[sd.waktu]; prev.box=it.box;
+  var expect=prev[sd.field];                          // nilai tahap ini yang app LIHAT sebelum diedit (utk verifikasi)
   it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; if(hasBox) it.box=box;
   closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
-  postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, nama:it.nama, rowHint:it.row,
-    stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user
-  }).then(function(j){ if(!j||!j.ok){ Object.assign(it,prev); renderList(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
-   .catch(function(){ Object.assign(it,prev); renderList(); toast('Gagal simpan (koneksi)','err'); });
+
+  function send(force){
+    return postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, nama:it.nama, rowHint:it.row,
+      stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user,
+      expect:(expect==null?'':expect), force:(force?1:0) });
+  }
+  function fail(msg){ Object.assign(it,prev); renderList(); toast(msg,'err'); }
+
+  send(false).then(function(j){
+    if(j && j.ok) return;
+    if(j && j.conflict){                              // nilai di sheet sudah berubah orang lain
+      var cur=(j.current===''||j.current==null)?'(kosong)':j.current;
+      if(confirm('⚠ Bentrok!\nNilai sudah menjadi '+cur+(j.by?(' oleh '+j.by):'')+'.\n\nTimpa dengan '+qty+' ?')){
+        it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; renderList();
+        send(true).then(function(j2){ if(!j2||!j2.ok) fail('Gagal timpa: '+((j2&&j2.error)||'?')); })
+                  .catch(function(){ fail('Gagal timpa (koneksi)'); });
+      } else {                                        // batal: pakai data terbaru dari server
+        it[sd.field]=(j.current===''||j.current==null)?null:j.current; if(j.by) it[sd.pic]=j.by; renderList();
+        toast('Dibatalkan — dipakai data terbaru ('+cur+')','warn');
+      }
+      return;
+    }
+    fail('Gagal simpan: '+((j&&j.error)||'?'));       // termasuk tolak simpan-kosong
+  }).catch(function(){ fail('Gagal simpan (koneksi)'); });
 }
 
 /* ============ KAMERA ============ */
