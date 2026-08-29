@@ -187,7 +187,7 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
 var DEFAULT_EXEC = 'https://script.google.com/macros/s/AKfycbyACbDpID4aCx827l7_5Q_wB7Fowb8WN66aik_88mICT2E5EqZUIAf_jOmwttcCYhkg/exec';
 var LS = {
   exec:'so_exec', theme:'so_theme', user:'so_user', admin:'so_admin',
-  session:'so_session', wh:'so_wh', stage:'so_stage', rack:'so_rack'
+  session:'so_session', wh:'so_wh', stage:'so_stage', rack:'so_rack', bmode:'so_bmode'
 };
 var WAREHOUSES = ['ETALASE','BULK','OPEN STOCK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
@@ -201,7 +201,7 @@ function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.sta
 var state = {
   exec:'', user:'', isAdmin:false, pics:[], sessions:[],
   sessionId:'', sessionName:'', wh:'', stage:'qinit', items:[], byKode:{}, filter:'all', q:'',
-  bulk:{ racks:[], koli:[], rack:'' }              // mode gudang BULK (koli)
+  bulk:{ racks:[], koli:[], rack:'', mode:'type' }  // mode gudang BULK (koli); mode: 'type'=ketik jumlah, 'scan'=scan +1 dus
 };
 function isBulk(){ return state.wh==='BULK'; }
 var scanner=null;
@@ -465,7 +465,7 @@ function handleScan(code){
     else { beep('warn'); state.q=code; $('inSearch').value=code; renderList(); toast('Kode tak ada — cari manual','warn'); }
     return;
   }
-  if(mine.length===1){ beep('ok'); $('inSearch').value=''; state.q=''; renderList(); openEditor(mine[0]); return; }
+  if(mine.length===1){ beep('ok'); $('inSearch').value=''; state.q=''; renderList(); bulkPick(mine[0]); return; }
   beep('ok'); showChooser(mine);                        // kode dipakai >1 barang -> popup pilih
 }
 // Popup pilih barang saat 1 Kode dipakai >1 barang berstok (kode ganda)
@@ -481,7 +481,7 @@ function showChooser(arr){
   $('chooseBack').classList.remove('hidden');
   $('chClose').onclick=function(){ $('chooseBack').classList.add('hidden'); focusScan(); };
   [].forEach.call($('chooseSheet').querySelectorAll('.item'),function(el){
-    el.onclick=function(){ $('chooseBack').classList.add('hidden'); $('inSearch').value=''; state.q=''; renderList(); openEditor(state.items[+el.dataset.i]); };
+    el.onclick=function(){ $('chooseBack').classList.add('hidden'); $('inSearch').value=''; state.q=''; renderList(); bulkPick(state.items[+el.dataset.i]); };
   });
 }
 function focusScan(){ setTimeout(function(){ var el=$('inSearch'); if(el&&!document.querySelector('.backdrop:not(.hidden)')) el.focus(); },200); }
@@ -573,6 +573,7 @@ function loadBulk(){
     });
     indexItems();
     if(!state.bulk.rack) state.bulk.rack = localStorage.getItem(LS.rack)||'';
+    state.bulk.mode = localStorage.getItem(LS.bmode)||'type';
     renderBulk(); focusScan();
   }).catch(function(){ $('listCard').innerHTML='<div style="padding:20px" class="muted">Gagal memuat bulk. Cek koneksi / URL /exec.</div>'; });
 }
@@ -593,11 +594,16 @@ function renderBulk(){
     '<div style="flex:1;min-width:150px"><label style="font-size:11px" class="muted">Rak aktif</label>'+
       '<input id="bulkRak" list="rakDL" value="'+esc(state.bulk.rack||'')+'" placeholder="pilih / ketik rak" '+
       'style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)">'+
-      '<datalist id="rakDL">'+opts+'</datalist></div>'+
+      '<datalist id="rakDL">'+opts+'</datalist>'+
+      '<div class="chips" style="margin-top:6px">'+
+        '<span class="chip'+(state.bulk.mode==='type'?' on':'')+'" data-bm="type">⌨️ Ketik jumlah</span>'+
+        '<span class="chip'+(state.bulk.mode==='scan'?' on':'')+'" data-bm="scan">📷 Scan +1 dus</span>'+
+      '</div></div>'+
     '<div class="s"><b>'+counted+'</b><span>SKU</span></div>'+
     '<div class="s"><b>'+totKoli+'</b><span>Koli</span></div>'+
     '<div class="s"><b>'+totDus+'</b><span>Dus</span></div>';
   var rk=$('bulkRak'); if(rk){ rk.onchange=function(){ state.bulk.rack=(this.value||'').trim(); try{localStorage.setItem(LS.rack,state.bulk.rack);}catch(e){} }; }
+  [].forEach.call($('stats').querySelectorAll('[data-bm]'),function(b){ b.onclick=function(){ state.bulk.mode=b.dataset.bm; try{localStorage.setItem(LS.bmode,state.bulk.mode);}catch(e){} renderBulk(); focusScan(); }; });
   var list=state.items;
   if(state.filter==='belum') list=list.filter(function(it){ return !map[normKey(it.kode)+'|'+normKey(it.nama)]; });
   else if(state.filter==='isi') list=list.filter(function(it){ return !!map[normKey(it.kode)+'|'+normKey(it.nama)]; });
@@ -683,6 +689,28 @@ function delKoli(id){
     .catch(function(){ state.bulk.koli.splice(idx,0,prev); renderBulkEditor(); toast('Gagal hapus (koneksi)','err'); });
 }
 function closeBulkEditor(){ $('edBack').classList.add('hidden'); editing=null; editKoliId=null; _bkEdit=null; renderBulk(); focusScan(); }
+
+// Saat SCAN: mode 'scan' -> +1 dus langsung; selain itu (atau non-bulk) buka editor.
+function bulkPick(it){ if(isBulk() && state.bulk.mode==='scan') return quickAddKoli(it); return openEditor(it); }
+// Mode B: tiap scan menambah 1 dus ke baris (SKU + rak aktif). Isi/dus auto dari data.
+function quickAddKoli(it){
+  var rak=(state.bulk.rack||'').trim();
+  if(!rak){ toast('Set Rak aktif dulu (mode Scan +1).','warn'); var rk=$('bulkRak'); if(rk) rk.focus(); return; }
+  var isi=it.isi;
+  if(isi==null||!(isi>0)){ toast('Isi/dus SKU ini belum ada di data — buka & isi manual.','warn'); return openBulkEditor(it); }
+  var k=normKey(it.kode), n=normKey(it.nama), rr=normKey(rak), line=null;
+  for(var i=0;i<state.bulk.koli.length;i++){ var r=state.bulk.koli[i]; if(normKey(r.kode)===k&&normKey(r.nama)===n&&normKey(r.rak)===rr){ line=r; break; } }
+  var id,dus,isNew=false,prevDus=null,prevSub=null;
+  if(line){ id=line.id; prevDus=line.dus; prevSub=line.subtotal; dus=(+line.dus||0)+1; line.dus=dus; line.subtotal=isi*dus; }
+  else { isNew=true; id='K'+(new Date().getTime())+'-'+Math.floor(Math.random()*100000); dus=1; line={id:id,kode:it.kode,nama:it.nama,rak:rak,isi:isi,dus:1,subtotal:isi,pic:state.user}; state.bulk.koli.push(line); }
+  renderBulk();
+  toast(esc(it.nama).slice(0,20)+' +1 → '+dus+' dus @ '+rak,'ok');
+  function rollback(){ if(isNew){ state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(id);}); }
+    else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } } renderBulk(); }
+  postExec({ action:'bulksave', id:state.sessionId, koliId:id, kode:it.kode, nama:it.nama, rak:rak, isi:isi, dus:dus, pic:state.user })
+    .then(function(j){ if(!j||!j.ok){ rollback(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
+    .catch(function(){ rollback(); toast('Gagal simpan (koneksi)','err'); });
+}
 
 /* ============ KAMERA ============ */
 $('btnCam').onclick=openCam; $('camClose').onclick=closeCam;
