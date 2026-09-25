@@ -193,10 +193,10 @@ var LS = {
 var WAREHOUSES = ['ETALASE','BULK','OPEN STOCK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
 // Tahap hitung (mode buta). field=kolom qty, pic=kolom PIC, tugas=kolom assignment, save=stage backend.
-// 2 tahap: Inisial (borongan) & Reconcile (difilter kolom Tugas Rec 1 yg diisi manual/dropdown).
+// 2 tahap: Inisial (borongan) & Reconcile (OTOMATIS: hanya item yg DEVIASI/selisih, tanpa assign).
 var STAGES = [
-  {k:'qinit', short:'Inisial',   label:'Qty Inisial', field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:null,        save:'qinit'},
-  {k:'rec1',  short:'Reconcile', label:'Reconcile',   field:'rec1',  pic:'picRec1',    waktu:'waktuRec1',    tugas:'tugasRec1', save:'rec1'}
+  {k:'qinit', short:'Inisial',   label:'Qty Inisial', field:'qinit', pic:'picInisial', waktu:'waktuInisial', tugas:null, save:'qinit'},
+  {k:'rec1',  short:'Reconcile', label:'Reconcile',   field:'rec1',  pic:'picRec1',    waktu:'waktuRec1',    tugas:null, dev:true, save:'rec1'}
 ];
 function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.stage) return STAGES[i]; return STAGES[0]; }
 var state = {
@@ -383,8 +383,7 @@ function normItem(o){
     box:num(o['Box']), qinit:num(o['Qty Inisial']),
     rec1:num(o['Reconcile 1']),
     picInisial:String(o['PIC Inisial']||''), picRec1:String(o['PIC Rec 1']||''),
-    waktuInisial:String(o['Waktu Inisial']||''), waktuRec1:String(o['Waktu Rec 1']||''),
-    tugasRec1:String(o['Tugas Rec 1']||'')
+    waktuInisial:String(o['Waktu Inisial']||''), waktuRec1:String(o['Waktu Rec 1']||'')
   };
 }
 // Nilai & status TAHAP AKTIF saja (mode buta — tak lihat tahap lain)
@@ -399,19 +398,22 @@ function assignedToMe(it){
   var t=normKey(it[sd.tugas]||'');
   return t!=='' && t===normKey(state.user);
 }
+// Item DEVIASI: sudah dihitung Inisial & hasilnya beda dari Qty Sistem (gain/loss). Dasar daftar Reconcile.
+function deviates(it){ return it.qinit!=null && it.qinit!==it.sistem; }
 
 /* ============ RENDER LIST ============ */
 function renderList(){
   if(isBulk()) return renderBulk();
-  var sd=stageDef(), assignedMode=(sd.tugas && !state.isAdmin);
-  var items=state.items.filter(assignedToMe);           // batasi ke tugas user (utk Rec)
+  var sd=stageDef(), devMode=!!sd.dev;
+  var items=state.items.filter(assignedToMe);
+  if(devMode) items=items.filter(deviates);             // RECONCILE = hanya item yg selisih (gain/loss)
   var q=state.q.trim();
   var stats={total:items.length,isi:0,belum:0};
   items.forEach(function(it){ if(stageFilled(it))stats.isi++; else stats.belum++; });
   $('stats').innerHTML =
-    '<div class="s"><b>'+stats.total+'</b><span>'+(assignedMode?'Tugasmu':'Item')+'</span></div>'+
-    '<div class="s"><b style="color:var(--ok)">'+stats.isi+'</b><span>Terisi</span></div>'+
-    '<div class="s"><b style="color:var(--warn)">'+stats.belum+'</b><span>Belum</span></div>';
+    '<div class="s"><b>'+stats.total+'</b><span>'+(devMode?'Deviasi':'Item')+'</span></div>'+
+    '<div class="s"><b style="color:var(--ok)">'+stats.isi+'</b><span>'+(devMode?'Sudah recon':'Terisi')+'</span></div>'+
+    '<div class="s"><b style="color:var(--warn)">'+stats.belum+'</b><span>'+(devMode?'Belum recon':'Belum')+'</span></div>';
 
   var list=items;
   if(state.filter==='belum') list=list.filter(function(it){return !stageFilled(it);});
@@ -419,7 +421,7 @@ function renderList(){
 
   if(q){ var scored=list.map(function(it){return{it:it,s:score(it,q)};}).filter(function(x){return x.s>0;}); scored.sort(function(a,b){return b.s-a.s;}); list=scored.map(function(x){return x.it;}); }
 
-  var empty = assignedMode ? 'Belum ada item yang ditugaskan ke kamu untuk '+esc(sd.short)+'.' : 'Tidak ada item.';
+  var empty = devMode ? 'Belum ada item deviasi (semua cocok / belum dihitung Inisial).' : 'Tidak ada item.';
   var html=list.slice(0,400).map(function(it){ return itemHTML(it,q); }).join('');
   $('listCard').innerHTML = html || '<div style="padding:20px" class="muted">'+empty+'</div>';
   [].forEach.call($('listCard').querySelectorAll('.item'),function(el){ el.onclick=function(){ openEditor(state.items[+el.dataset.i]); }; });
