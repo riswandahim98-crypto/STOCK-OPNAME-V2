@@ -462,6 +462,7 @@ $('btnKbd').onclick=function(){ var el=$('inSearch'); el.setAttribute('inputmode
 
 function handleScan(code){
   if(!code) return;
+  if(_bkPending){ return; }                             // ada konfirmasi koli terbuka -> abaikan scan nyasar
   var k=normKey(code);
   var all=state.byKode[k]||[];                          // semua item dgn Kode ini
   var mine=all.filter(assignedToMe);                    // yg jadi tugas user di tahap aktif
@@ -714,25 +715,41 @@ function closeBulkEditor(){ $('edBack').classList.add('hidden'); editing=null; e
 
 // Saat SCAN: mode 'scan' -> +1 dus langsung; selain itu (atau non-bulk) buka editor.
 function bulkPick(it){ if(isBulk() && state.bulk.mode==='scan') return quickAddKoli(it); return openEditor(it); }
-var _lastQuick=null;     // guard double-read: {key, t}
+var _bkPending=null;     // item menunggu konfirmasi OK (mode scan +1)
 var _lastKoliAdd=null;   // utk Undo: {id,isNew,prevDus,prevSub,kode,nama,isi,rak,dus}
-// Mode B: tiap scan menambah 1 dus ke baris (SKU + rak aktif). Isi/dus auto dari data.
+// Mode B: scan -> TAMPIL KONFIRMASI dulu (tombol OK). Scan lain diabaikan sampai OK/Batal.
 function quickAddKoli(it){
   var rak=(state.bulk.rack||'').trim();
   if(!rak){ toast('Set Rak aktif dulu (mode Scan +1).','warn'); var rk=$('bulkRakSel'); if(rk) rk.focus(); return; }
   var isi=it.isi;
   if(isi==null||!(isi>0)){ toast('Isi/dus SKU ini belum ada di data — buka & isi manual.','warn'); return openBulkEditor(it); }
-  // GUARD double-read: kode+nama+rak sama dalam <300ms diabaikan (1 scan kebaca 2x)
-  var gk=normKey(it.kode)+'|'+normKey(it.nama)+'|'+normKey(rak), now=(new Date()).getTime();
-  if(_lastQuick && _lastQuick.key===gk && (now-_lastQuick.t)<300){ return; }
-  _lastQuick={key:gk, t:now};
+  _bkPending=it;
+  var eS=$('inSearch'); if(eS) eS.blur();                 // blur biar scan nyasar tak masuk saat konfirmasi
+  var rr=normKey(rak), curDus=0;
+  state.bulk.koli.forEach(function(r){ if(normKey(r.kode)===normKey(it.kode)&&normKey(r.nama)===normKey(it.nama)&&normKey(r.rak)===rr) curDus+=(+r.dus||0); });
+  $('edSheet').innerHTML=
+    '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3></div>'+
+    '<div class="muted" style="font-size:12px;margin-top:-6px">Kode '+esc(it.kode||'-')+' · isi '+isi+'/dus</div>'+
+    '<div class="card" style="padding:14px;margin-top:10px;text-align:center">'+
+      '<div class="muted" style="font-size:13px">Rak <b style="color:var(--ink)">'+esc(rak)+'</b></div>'+
+      '<div style="font-size:28px;font-weight:800;margin:6px 0">+1 dus <span class="muted" style="font-size:14px;font-weight:600">('+isi+' pcs)</span></div>'+
+      '<div class="muted" style="font-size:12px">di rak ini jadi '+(curDus+1)+' dus</div>'+
+    '</div>'+
+    '<button class="btn" id="bkOk" style="margin-top:12px;font-size:18px;padding:18px">✓ OK (+1 dus)</button>'+
+    '<button class="btn ghost" id="bkCancelScan" style="margin-top:8px">✕ Batal</button>';
+  $('edBack').classList.remove('hidden');
+  $('bkOk').onclick=function(){ _bkPending=null; $('edBack').classList.add('hidden'); commitQuickKoli(it,rak,isi); };
+  $('bkCancelScan').onclick=function(){ _bkPending=null; $('edBack').classList.add('hidden'); focusScan(); };
+}
+// commit +1 dus (dipanggil hanya setelah OK)
+function commitQuickKoli(it, rak, isi){
   var k=normKey(it.kode), n=normKey(it.nama), rr=normKey(rak), line=null;
   for(var i=0;i<state.bulk.koli.length;i++){ var r=state.bulk.koli[i]; if(normKey(r.kode)===k&&normKey(r.nama)===n&&normKey(r.rak)===rr){ line=r; break; } }
   var id,dus,isNew=false,prevDus=null,prevSub=null;
   if(line){ id=line.id; prevDus=line.dus; prevSub=line.subtotal; dus=(+line.dus||0)+1; line.dus=dus; line.subtotal=isi*dus; }
   else { isNew=true; id='K'+(new Date().getTime())+'-'+Math.floor(Math.random()*100000); dus=1; line={id:id,kode:it.kode,nama:it.nama,rak:rak,isi:isi,dus:1,subtotal:isi,pic:state.user}; state.bulk.koli.push(line); }
   _lastKoliAdd={ id:id, isNew:isNew, prevDus:prevDus, prevSub:prevSub, kode:it.kode, nama:it.nama, isi:isi, rak:rak, dus:dus };
-  renderBulk();
+  renderBulk(); focusScan();
   toast(esc(it.nama).slice(0,20)+' +1 → '+dus+' dus @ '+rak,'ok');
   function rollback(){ if(isNew){ state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(id);}); }
     else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } } _lastKoliAdd=null; renderBulk(); }
@@ -743,7 +760,7 @@ function quickAddKoli(it){
 // Undo scan +1 terakhir (mode B)
 function undoLastKoli(){
   var la=_lastKoliAdd; if(!la){ return; }
-  _lastKoliAdd=null; _lastQuick=null;
+  _lastKoliAdd=null;
   if(la.isNew){
     state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(la.id);}); renderBulk();
     toast('Dibatalkan: '+esc(la.nama).slice(0,18),'warn');
