@@ -198,7 +198,7 @@ function binOptions(){ var a=[]; for(var i=1;i<=100;i++) a.push(String(i)); ['10
 function binPickHTML(selId,manId,current){
   var bins=binOptions(), inList=false, cur=(current==null?'':String(current));
   var opts='<option value="">— pilih bin / lokasi —</option>'+
-    bins.map(function(b){ var lbl=(/^[0-9]+$/.test(b)?('Bin '+b):('Non-bin '+b)); var s=(String(b)===cur); if(s)inList=true; return '<option value="'+esc(b)+'"'+(s?' selected':'')+'>'+esc(lbl)+'</option>'; }).join('')+
+    bins.map(function(b){ var s=(String(b)===cur); if(s)inList=true; return '<option value="'+esc(b)+'"'+(s?' selected':'')+'>'+esc(b)+'</option>'; }).join('')+
     '<option value="__type__"'+((cur&&!inList)?' selected':'')+'>✎ ketik manual…</option>';
   var stIn='width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)';
   return '<select id="'+selId+'" style="'+stIn+'">'+opts+'</select>'+
