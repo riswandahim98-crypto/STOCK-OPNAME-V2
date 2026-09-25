@@ -192,6 +192,18 @@ var LS = {
 };
 var WAREHOUSES = ['ETALASE','BULK','OPEN STOCK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
+var BIN_SHEETS = {'OPEN STOCK':1};                 // gudang yg pakai field Bin (lokasi)
+function binOptions(){ var a=[]; for(var i=1;i<=100;i++) a.push(String(i)); ['10-A','10-B','10-C','10-D','17-A','17-B','17-C','17-D','17-E','17-F'].forEach(function(r){a.push(r);}); return a; }
+// Pemilih Bin (dropdown Bin 1-100 + non-bin rak) + opsi ketik manual (utk >1 bin, pisah koma). Pakai bindRackPick/getRackVal.
+function binPickHTML(selId,manId,current){
+  var bins=binOptions(), inList=false, cur=(current==null?'':String(current));
+  var opts='<option value="">— pilih bin / lokasi —</option>'+
+    bins.map(function(b){ var lbl=(/^[0-9]+$/.test(b)?('Bin '+b):('Non-bin '+b)); var s=(String(b)===cur); if(s)inList=true; return '<option value="'+esc(b)+'"'+(s?' selected':'')+'>'+esc(lbl)+'</option>'; }).join('')+
+    '<option value="__type__"'+((cur&&!inList)?' selected':'')+'>✎ ketik manual…</option>';
+  var stIn='width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)';
+  return '<select id="'+selId+'" style="'+stIn+'">'+opts+'</select>'+
+    '<input id="'+manId+'" class="'+((cur&&!inList)?'':'hidden')+'" value="'+esc(cur&&!inList?cur:'')+'" placeholder="ketik bin / lokasi (pisah koma bila >1)" style="margin-top:6px;'+stIn+'">';
+}
 // Tahap hitung (mode buta). field=kolom qty, pic=kolom PIC, tugas=kolom assignment, save=stage backend.
 // 2 tahap: Inisial (borongan) & Reconcile (OTOMATIS: hanya item yg DEVIASI/selisih, tanpa assign).
 var STAGES = [
@@ -380,7 +392,7 @@ function normItem(o){
     row:o._row, kode:String(o['Kode Barang']||''), nama:String(o['Nama Barang']||''),
     kategori:String(o['Kategori']||''), brand:String(o['Brand Owner']||''), satuan:String(o['Nama Satuan']||''),
     sistem:num(o['Qty Sistem']),
-    box:num(o['Box']), qinit:num(o['Qty Inisial']),
+    box:num(o['Box']), bin:String(o['Bin']||''), qinit:num(o['Qty Inisial']),
     rec1:num(o['Reconcile 1']),
     picInisial:String(o['PIC Inisial']||''), picRec1:String(o['PIC Rec 1']||''),
     waktuInisial:String(o['Waktu Inisial']||''), waktuRec1:String(o['Waktu Rec 1']||'')
@@ -497,25 +509,27 @@ var editing=null;
 function openEditor(it){
   if(isBulk()) return openBulkEditor(it);
   editing=it;
-  var hasBox=!!BOX_SHEETS[state.wh];
+  var hasBox=!!BOX_SHEETS[state.wh], hasBin=!!BIN_SHEETS[state.wh];
   var sd=stageDef();
   var sel=[
     ['Kategori',it.kategori],['Brand',it.brand],['Satuan',it.satuan]
   ].map(function(k){return '<div class="kv"><span class="muted">'+k[0]+'</span><b>'+esc(String(k[1]||'-'))+'</b></div>';}).join('');
   var boxHTML = hasBox ? qtyFieldHTML('Box (jumlah dus)','edBox',it.box) : '';
+  var binHTML = hasBin ? '<div class="qtybox" style="margin-top:10px"><label>Bin / Lokasi</label>'+binPickHTML('edBinSel','edBinMan',it.bin)+'</div>' : '';
   var pic=stagePic(it), wkt=it[sd.waktu]||'';
   $('edSheet').innerHTML=
     '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3><button class="btn ghost sm" id="edClose">✕</button></div>'+
     '<div class="muted" style="font-size:12px;margin-top:-6px">Kode: '+esc(it.kode||'-')+' · '+esc(state.wh)+' · <b>'+esc(sd.label)+'</b></div>'+
     (pic ? '<div class="muted" style="font-size:11.5px;margin-top:2px">✍️ '+esc(sd.short)+' diisi oleh: '+esc(pic)+(wkt?' · '+esc(wkt):'')+'</div>' : '')+
     '<div class="card" style="padding:10px;margin-top:6px">'+sel+'</div>'+
-    boxHTML+
+    boxHTML+ binHTML+
     // BUTA: hanya satu field = tahap aktif; tak menampilkan tahap lain
     '<div style="margin-top:10px">'+ qtyFieldHTML('Hitungan — '+sd.label,'edQty',stageVal(it)) +'</div>'+
     '<button class="btn" id="edSave" style="margin-top:14px">💾 Simpan '+esc(sd.short)+'</button>';
   $('edBack').classList.remove('hidden');
   $('edClose').onclick=closeEditor;
   bindQty();
+  if(hasBin) bindRackPick('edBinSel','edBinMan',null);
   $('edSave').onclick=saveEditor;
   setTimeout(function(){ var el=$('edQty'); if(el){ el.focus(); el.select&&el.select(); } },60);
 }
@@ -533,20 +547,21 @@ function step(id,d){ var el=$(id); var n=(parseFloat(el.value)||0)+d; if(n<0)n=0
 function edVal(id){ var el=$(id); if(!el)return null; return num(el.value); }
 function closeEditor(){ $('edBack').classList.add('hidden'); editing=null; focusScan(); }
 function saveEditor(){
-  var it=editing, hasBox=!!BOX_SHEETS[state.wh], sd=stageDef();
+  var it=editing, hasBox=!!BOX_SHEETS[state.wh], hasBin=!!BIN_SHEETS[state.wh], sd=stageDef();
   var qty=edVal('edQty'), box=hasBox?edVal('edBox'):null;
+  var bin=hasBin?getRackVal('edBinSel','edBinMan'):null;   // lokasi bin (baca sebelum editor ditutup)
   // PREVENTIF ANTI-HILANG: jangan simpan qty kosong (bisa mencoret nilai yg sudah ada). Isi 0 kalau memang nol stok.
   if(qty==null){ toast('Isi angka dulu (ketik 0 kalau stok nol). Simpan kosong ditolak agar data tak hilang.','warn'); var eq=$('edQty'); if(eq) eq.focus(); return; }
   // optimistic: tulis hanya tahap aktif + PIC tahap ini
-  var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev[sd.waktu]=it[sd.waktu]; prev.box=it.box;
+  var prev={}; prev[sd.field]=it[sd.field]; prev[sd.pic]=it[sd.pic]; prev[sd.waktu]=it[sd.waktu]; prev.box=it.box; prev.bin=it.bin;
   var expect=prev[sd.field];                          // nilai tahap ini yang app LIHAT sebelum diedit (utk verifikasi)
-  it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; if(hasBox) it.box=box;
+  it[sd.field]=qty; it[sd.pic]=state.user; it[sd.waktu]='baru saja'; if(hasBox) it.box=box; if(hasBin) it.bin=bin;
   closeEditor(); renderList(); toast('Tersimpan ✓ ('+sd.short+')','ok');
 
   function send(force){
     return postExec({ action:'save', id:state.sessionId, sheet:state.wh, kode:it.kode, nama:it.nama, rowHint:it.row,
       stage:sd.save, qty:qty==null?'':qty, box:box==null?'':box, pic:state.user,
-      expect:(expect==null?'':expect), force:(force?1:0) });
+      expect:(expect==null?'':expect), force:(force?1:0), bin:(hasBin?(bin||''):undefined) });
   }
   function fail(msg){ Object.assign(it,prev); renderList(); toast(msg,'err'); }
 
@@ -717,40 +732,43 @@ function closeBulkEditor(){ $('edBack').classList.add('hidden'); editing=null; e
 function bulkPick(it){ if(isBulk() && state.bulk.mode==='scan') return quickAddKoli(it); return openEditor(it); }
 var _bkPending=null;     // item menunggu konfirmasi OK (mode scan +1)
 var _lastKoliAdd=null;   // utk Undo: {id,isNew,prevDus,prevSub,kode,nama,isi,rak,dus}
-// Mode B: scan -> TAMPIL KONFIRMASI dulu (tombol OK). Scan lain diabaikan sampai OK/Batal.
+// Mode B: scan -> KONFIRMASI dgn field ISI per koli (prefill standar, bisa diubah utk koli variasi).
 function quickAddKoli(it){
   var rak=(state.bulk.rack||'').trim();
   if(!rak){ toast('Set Rak aktif dulu (mode Scan +1).','warn'); var rk=$('bulkRakSel'); if(rk) rk.focus(); return; }
-  var isi=it.isi;
-  if(isi==null||!(isi>0)){ toast('Isi/dus SKU ini belum ada di data — buka & isi manual.','warn'); return openBulkEditor(it); }
   _bkPending=it;
   var eS=$('inSearch'); if(eS) eS.blur();                 // blur biar scan nyasar tak masuk saat konfirmasi
-  var rr=normKey(rak), curDus=0;
-  state.bulk.koli.forEach(function(r){ if(normKey(r.kode)===normKey(it.kode)&&normKey(r.nama)===normKey(it.nama)&&normKey(r.rak)===rr) curDus+=(+r.dus||0); });
+  var stdIsi=(it.isi!=null && it.isi>0)?it.isi:null;
+  var defIsi=(stdIsi!=null)?stdIsi:'';
   $('edSheet').innerHTML=
     '<div class="row"><h3 style="flex:1">'+esc(it.nama)+'</h3></div>'+
-    '<div class="muted" style="font-size:12px;margin-top:-6px">Kode '+esc(it.kode||'-')+' · isi '+isi+'/dus</div>'+
-    '<div class="card" style="padding:14px;margin-top:10px;text-align:center">'+
-      '<div class="muted" style="font-size:13px">Rak <b style="color:var(--ink)">'+esc(rak)+'</b></div>'+
-      '<div style="font-size:28px;font-weight:800;margin:6px 0">+1 dus <span class="muted" style="font-size:14px;font-weight:600">('+isi+' pcs)</span></div>'+
-      '<div class="muted" style="font-size:12px">di rak ini jadi '+(curDus+1)+' dus</div>'+
-    '</div>'+
-    '<button class="btn" id="bkOk" style="margin-top:12px;font-size:18px;padding:18px">✓ OK (+1 dus)</button>'+
+    '<div class="muted" style="font-size:12px;margin-top:-6px">Kode '+esc(it.kode||'-')+' · Rak <b style="color:var(--ink)">'+esc(rak)+'</b></div>'+
+    '<div class="muted" style="font-size:13px;margin-top:12px">Isi (pcs) di koli ini?</div>'+
+    qtyFieldHTML('','bkScanIsi',defIsi)+
+    (stdIsi!=null
+      ? '<div class="muted" style="font-size:11px;margin-top:4px">Standar '+stdIsi+' pcs/koli — ubah kalau koli ini beda.</div>'
+      : '<div style="font-size:11px;margin-top:4px;color:var(--warn)">Tak ada standar di data — isi manual.</div>')+
+    '<button class="btn" id="bkOk" style="margin-top:14px;font-size:18px;padding:18px">✓ OK (+1 koli)</button>'+
     '<button class="btn ghost" id="bkCancelScan" style="margin-top:8px">✕ Batal</button>';
   $('edBack').classList.remove('hidden');
-  $('bkOk').onclick=function(){ _bkPending=null; $('edBack').classList.add('hidden'); commitQuickKoli(it,rak,isi); };
+  bindQty();
+  $('bkOk').onclick=function(){
+    var isi=num($('bkScanIsi').value);
+    if(isi==null||!(isi>0)){ toast('Isi koli harus > 0.','warn'); var e=$('bkScanIsi'); if(e) e.focus(); return; }
+    _bkPending=null; $('edBack').classList.add('hidden'); commitQuickKoli(it,rak,isi);
+  };
   $('bkCancelScan').onclick=function(){ _bkPending=null; $('edBack').classList.add('hidden'); focusScan(); };
 }
-// commit +1 dus (dipanggil hanya setelah OK)
+// commit +1 koli (setelah OK). Koli dgn ISI sama (SKU+rak+isi) diakumulasi; isi beda = baris sendiri.
 function commitQuickKoli(it, rak, isi){
   var k=normKey(it.kode), n=normKey(it.nama), rr=normKey(rak), line=null;
-  for(var i=0;i<state.bulk.koli.length;i++){ var r=state.bulk.koli[i]; if(normKey(r.kode)===k&&normKey(r.nama)===n&&normKey(r.rak)===rr){ line=r; break; } }
+  for(var i=0;i<state.bulk.koli.length;i++){ var r=state.bulk.koli[i]; if(normKey(r.kode)===k&&normKey(r.nama)===n&&normKey(r.rak)===rr&&(+r.isi||0)===isi){ line=r; break; } }
   var id,dus,isNew=false,prevDus=null,prevSub=null;
   if(line){ id=line.id; prevDus=line.dus; prevSub=line.subtotal; dus=(+line.dus||0)+1; line.dus=dus; line.subtotal=isi*dus; }
   else { isNew=true; id='K'+(new Date().getTime())+'-'+Math.floor(Math.random()*100000); dus=1; line={id:id,kode:it.kode,nama:it.nama,rak:rak,isi:isi,dus:1,subtotal:isi,pic:state.user}; state.bulk.koli.push(line); }
   _lastKoliAdd={ id:id, isNew:isNew, prevDus:prevDus, prevSub:prevSub, kode:it.kode, nama:it.nama, isi:isi, rak:rak, dus:dus };
   renderBulk(); focusScan();
-  toast(esc(it.nama).slice(0,20)+' +1 → '+dus+' dus @ '+rak,'ok');
+  toast(esc(it.nama).slice(0,18)+' +1 koli ('+isi+' pcs) → '+dus+' koli @ '+rak,'ok');
   function rollback(){ if(isNew){ state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(id);}); }
     else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } } _lastKoliAdd=null; renderBulk(); }
   postExec({ action:'bulksave', id:state.sessionId, koliId:id, kode:it.kode, nama:it.nama, rak:rak, isi:isi, dus:dus, pic:state.user })
