@@ -402,11 +402,13 @@ function normItem(o){
 function stageVal(it){ return it[stageDef().field]; }
 function stageFilled(it){ return stageVal(it)!=null; }
 function stagePic(it){ return it[stageDef().pic]||''; }
-// Item ini tugas user login di tahap aktif? (Inisial=borongan; admin=semua; Rec=hanya yg ditugaskan)
+// Item ini tugas user login di tahap aktif? (Inisial=borongan; admin=semua; Reconcile=milik penghitung awal)
 function assignedToMe(it){
   if(isBulk()) return true;                            // BULK = mode koli, tak pakai tahap/tugas
+  if(state.isAdmin) return true;                       // admin lihat semua
   var sd=stageDef();
-  if(!sd.tugas || state.isAdmin) return true;
+  if(sd.dev) return normKey(it.picInisial||'')===normKey(state.user);  // Reconcile: hanya item yg Inisial-nya dia hitung
+  if(!sd.tugas) return true;
   var t=normKey(it[sd.tugas]||'');
   return t!=='' && t===normKey(state.user);
 }
@@ -433,7 +435,7 @@ function renderList(){
 
   if(q){ var scored=list.map(function(it){return{it:it,s:score(it,q)};}).filter(function(x){return x.s>0;}); scored.sort(function(a,b){return b.s-a.s;}); list=scored.map(function(x){return x.it;}); }
 
-  var empty = devMode ? 'Belum ada item deviasi (semua cocok / belum dihitung Inisial).' : 'Tidak ada item.';
+  var empty = devMode ? (state.isAdmin ? 'Belum ada item deviasi.' : 'Belum ada item deviasi dari hitunganmu (yang kamu isi di Inisial).') : 'Tidak ada item.';
   var html=list.slice(0,400).map(function(it){ return itemHTML(it,q); }).join('');
   $('listCard').innerHTML = html || '<div style="padding:20px" class="muted">'+empty+'</div>';
   [].forEach.call($('listCard').querySelectorAll('.item'),function(el){ el.onclick=function(){ openEditor(state.items[+el.dataset.i]); }; });
