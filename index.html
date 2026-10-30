@@ -188,7 +188,10 @@ mark{background:var(--acc2);color:#04231f;border-radius:3px;padding:0 1px}
 var DEFAULT_EXEC = 'https://script.google.com/macros/s/AKfycbyACbDpID4aCx827l7_5Q_wB7Fowb8WN66aik_88mICT2E5EqZUIAf_jOmwttcCYhkg/exec';
 var LS = {
   exec:'so_exec', theme:'so_theme', user:'so_user', admin:'so_admin',
-  session:'so_session', wh:'so_wh', stage:'so_stage', rack:'so_rack', bmode:'so_bmode'
+  session:'so_session', wh:'so_wh', stage:'so_stage', rack:'so_rack', bmode:'so_bmode',
+  // LPN yang sudah discan pada sesi ini, supaya satu koli tidak terhitung
+  // dua kali walau aplikasinya dimuat ulang. Per peramban.
+  lpnDiscan:'so_lpn_scanned'
 };
 var WAREHOUSES = ['ETALASE','BULK','OPEN STOCK','FLASHSALE','RETURN'];
 var BOX_SHEETS = {FLASHSALE:1, RETURN:1};
@@ -214,7 +217,10 @@ function stageDef(){ for(var i=0;i<STAGES.length;i++) if(STAGES[i].k===state.sta
 var state = {
   exec:'', user:'', isAdmin:false, pics:[], sessions:[],
   sessionId:'', sessionName:'', wh:'', stage:'qinit', items:[], byKode:{}, filter:'all', q:'',
-  bulk:{ racks:[], koli:[], rack:'', mode:'type' }  // mode gudang BULK (koli); mode: 'type'=ketik jumlah, 'scan'=scan +1 dus
+  bulk:{ racks:[], koli:[], rack:'', mode:'type' },  // mode gudang BULK (koli); mode: 'type'=ketik jumlah, 'scan'=scan +1 dus
+  // Daftar koli dari WMS: nomor LPN -> {kode,nama,isi,rak}. Dibaca dari
+  // tab 'LPN' di dokumen sesi, diisi Apps Script TarikLpnOpname.gs.
+  lpn:{}, lpnJml:0, lpnGagal:''
 };
 function isBulk(){ return state.wh==='BULK'; }
 var scanner=null;
@@ -477,6 +483,10 @@ $('btnKbd').onclick=function(){ var el=$('inSearch'); el.setAttribute('inputmode
 function handleScan(code){
   if(!code) return;
   if(_bkPending){ return; }                             // ada konfirmasi koli terbuka -> abaikan scan nyasar
+  // Stiker LPN dari WMS: satu nomor = satu koli, lengkap dengan isinya.
+  // Dicoba lebih dulu karena bentuknya khas dan tidak mungkin bentrok
+  // dengan kode barang.
+  if(isLpn(code)) return handleScanLpn(code);
   var k=normKey(code);
   var all=state.byKode[k]||[];                          // semua item dgn Kode ini
   var mine=all.filter(assignedToMe);                    // yg jadi tugas user di tahap aktif
@@ -487,6 +497,48 @@ function handleScan(code){
   }
   if(mine.length===1){ beep('ok'); $('inSearch').value=''; state.q=''; renderList(); bulkPick(mine[0]); return; }
   beep('ok'); showChooser(mine);                        // kode dipakai >1 barang -> popup pilih
+}
+// Scan stiker LPN: nomor koli diterjemahkan jadi barang + isi, lalu
+// langsung ditambahkan sebagai 1 dus. Tidak ada 'isi per dus' yang perlu
+// diketik — angkanya datang dari WMS, bukan dari ingatan petugas.
+function handleScanLpn(code){
+  var no=normLpn(code);
+  $('inSearch').value='';
+  if(!isBulk()){ beep('warn'); toast('Stiker LPN hanya dipakai di gudang BULK.','warn'); return; }
+  if(!state.lpnJml){
+    beep('err');
+    toast(state.lpnGagal || 'Daftar LPN belum dimuat — tarik dulu lewat menu WMS di spreadsheet.','err');
+    return;
+  }
+  var d=state.lpn[no];
+  if(!d){
+    beep('err');
+    toast(no+' tidak ada di daftar koli WMS. Mungkin sudah pindah/dibongkar, atau daftarnya perlu ditarik ulang.','err');
+    return;
+  }
+  var dipakai=lpnTerpakai();
+  if(dipakai[no]){
+    beep('err');
+    toast('Koli '+no+' SUDAH discan di sesi ini. Tidak dihitung dua kali.','err');
+    return;
+  }
+  var rak=(state.bulk.rack||'').trim();
+  if(!rak){ beep('warn'); toast('Set Rak aktif dulu.','warn'); var rk=$('bulkRakSel'); if(rk) rk.focus(); return; }
+  if(!(d.isi>0)){ beep('err'); toast('Isi koli '+no+' tidak terbaca di daftar WMS.','err'); return; }
+  // Rak di WMS cuma diberitahukan, bukan dipaksakan: yang dipakai tetap rak
+  // aktif di tangan petugas. Kalau beda, itu justru temuan opname.
+  if(d.rak && normKey(d.rak)!==normKey(rak)){
+    toast('Catatan: di WMS koli ini tercatat di rak '+d.rak+'.','warn');
+  }
+  // Koli yang di WMS sudah dipindahkan/dibongkar TETAP boleh dihitung —
+  // catatan sistem bisa tertinggal dari kenyataan, dan yang memegang
+  // dusnya petugas, bukan kolom status. Tapi ia harus TAHU, karena koli
+  // semacam itu berisiko sudah terhitung di tempat lain.
+  if(d.status && d.status.toLowerCase()!=='aktif'){
+    toast('⚠ Di WMS koli ini berstatus '+d.status+'. Pastikan dusnya memang utuh di rak ini.','warn');
+  }
+  beep('ok'); state.q=''; renderList();
+  commitQuickKoli({kode:d.kode, nama:d.nama}, rak, d.isi, no);
 }
 // Popup pilih barang saat 1 Kode dipakai >1 barang berstok (kode ganda)
 function showChooser(arr){
@@ -585,16 +637,63 @@ function saveEditor(){
   }).catch(function(){ fail('Gagal simpan (koneksi)'); });
 }
 
+/* ============ DAFTAR LPN (stiker koli dari WMS) ============ */
+// Stiker di rak bulk ada dua jenis: barcode kode barang yang lama, dan
+// label LPN dari WMS yang QR-nya berisi nomor LPN saja. Daftar ini yang
+// membuat nomor LPN bisa diterjemahkan jadi barang + isi koli.
+//
+// Dibaca dari tab 'LPN' di dokumen sesi (diisi Apps Script TarikLpnOpname.gs).
+// Kalau tabnya belum ada, aplikasi tetap jalan seperti dulu — scan kode
+// barang tidak terganggu sama sekali.
+function isLpn(code){ return /^LPN[-s]?d+$/i.test(String(code||'').trim()); }
+function normLpn(code){
+  var m=String(code||'').trim().toUpperCase().match(/^LPN[-s]?(d+)$/);
+  return m ? 'LPN-'+m[1] : normKey(code);
+}
+function loadLpn(){
+  state.lpn={}; state.lpnJml=0; state.lpnGagal='';
+  return gvizSheet(state.sessionId,'LPN').then(function(rows){
+    (rows||[]).forEach(function(r){
+      var no=normLpn(r.lpn||r.LPN||r.Lpn);
+      if(!no) return;
+      state.lpn[no]={ lpn:no, kode:String(r.kode||r.Kode||''), nama:String(r.nama||r.Nama||''),
+                      isi:num(r.isi||r.Isi), rak:String(r.rak||r.Rak||''),
+                      status:String(r.status||r.Status||'') };
+      state.lpnJml++;
+    });
+  }).catch(function(){ state.lpnGagal='Tab LPN belum ada atau tidak bisa dibaca.'; });
+}
+// Koli yang sudah discan hari ini. Disimpan per sesi supaya satu dus tidak
+// terhitung dua kali — hal yang MUSTAHIL dijaga kalau yang discan cuma kode
+// barang, karena semua dus barang itu barcodenya sama.
+function lpnTerpakai(){
+  try{ var o=JSON.parse(localStorage.getItem(LS.lpnDiscan)||'{}');
+       return (o&&o.k===state.sessionId)?(o.v||{}):{}; }catch(e){ return {}; }
+}
+function lpnTandai(no,koliId){
+  try{ var v=lpnTerpakai(); v[no]=koliId||1;
+       localStorage.setItem(LS.lpnDiscan, JSON.stringify({k:state.sessionId, v:v})); }catch(e){}
+}
+function lpnLepas(no){
+  try{ var v=lpnTerpakai(); delete v[no];
+       localStorage.setItem(LS.lpnDiscan, JSON.stringify({k:state.sessionId, v:v})); }catch(e){}
+}
+
 /* ============ GUDANG BULK (mode KOLI) ============ */
 function loadBulk(){
   $('stats').innerHTML=''; $('listCard').innerHTML='<div style="padding:20px" class="muted">Memuat bulk…</div>';
   postExec({ action:'bulkinit', id:state.sessionId }).then(function(j){
     if(!j || !j.ok) throw new Error('bad');
     state.bulk.racks = j.racks||[]; state.bulk.koli = j.rows||[];
+    // Koli yang sudah tercatat di sheet ikut ditandai, supaya penolakan scan
+    // ganda berlaku lintas petugas dan lintas HP — bukan cuma di peramban ini.
+    // (Baru berisi sesudah Code.gs menulis kolom LPN; sebelum itu tidak apa-apa.)
+    (j.rows||[]).forEach(function(r){ if(r && r.lpn) lpnTandai(normLpn(r.lpn), r.id); });
     state.items = (j.ref||[]).map(function(r){
       return { kode:String(r.kode||''), nama:String(r.nama||''), brand:String(r.brand||''), kategori:'', satuan:'', isi:(r.isi==null?null:r.isi) };
     });
     indexItems();
+    loadLpn().then(renderBulk);          // daftar koli WMS, untuk scan stiker LPN
     if(!state.bulk.rack) state.bulk.rack = localStorage.getItem(LS.rack)||'';
     state.bulk.mode = localStorage.getItem(LS.bmode)||'type';
     renderBulk(); focusScan();
@@ -636,7 +735,13 @@ function renderBulk(){
       '<div class="chips" style="margin-top:6px">'+
         '<span class="chip'+(state.bulk.mode==='type'?' on':'')+'" data-bm="type">⌨️ Ketik jumlah</span>'+
         '<span class="chip'+(state.bulk.mode==='scan'?' on':'')+'" data-bm="scan">📷 Scan +1 dus</span>'+
-      '</div></div>'+
+      '</div>'+
+      // Keadaan daftar LPN disebut terus-terang. Kalau belum ada, petugas
+      // harus tahu SEKARANG — bukan waktu stiker pertama gagal discan.
+      (state.lpnJml
+        ? '<div class="muted" style="font-size:11px;margin-top:6px">📦 '+state.lpnJml+' koli WMS siap discan — stiker LPN langsung isi sendiri</div>'
+        : '<div style="font-size:11px;margin-top:6px;color:var(--warn)">⚠ Daftar LPN belum dimuat — stiker LPN belum bisa discan. Tarik lewat menu WMS di spreadsheet, lalu muat ulang.</div>')+
+      '</div>'+
     '<div class="s"><b>'+counted+'</b><span>SKU</span></div>'+
     '<div class="s"><b>'+totKoli+'</b><span>Koli</span></div>'+
     '<div class="s"><b>'+totDus+'</b><span>Dus</span></div>';
@@ -721,6 +826,10 @@ function addKoli(){
 }
 function delKoli(id){
   var idx=-1, prev=null;
+  // Koli yang dihapus harus bisa discan ulang (db/612).
+  for(var z=0;z<state.bulk.koli.length;z++){
+    if(String(state.bulk.koli[z].id)===String(id) && state.bulk.koli[z].lpn){ lpnLepas(state.bulk.koli[z].lpn); break; }
+  }
   for(var i=0;i<state.bulk.koli.length;i++){ if(String(state.bulk.koli[i].id)===String(id)){ idx=i; prev=state.bulk.koli[i]; break; } }
   if(idx<0) return;
   state.bulk.koli.splice(idx,1); renderBulkEditor();
@@ -762,18 +871,24 @@ function quickAddKoli(it){
   $('bkCancelScan').onclick=function(){ _bkPending=null; $('edBack').classList.add('hidden'); focusScan(); };
 }
 // commit +1 koli (setelah OK). Koli dgn ISI sama (SKU+rak+isi) diakumulasi; isi beda = baris sendiri.
-function commitQuickKoli(it, rak, isi){
+// db/612 — `lpnNo` diisi kalau koli ini masuk lewat scan stiker LPN.
+// Nomornya ditandai supaya koli yang sama tidak bisa discan dua kali,
+// dan ikut dikirim ke backend supaya nanti bisa ditulis ke kolom sendiri.
+function commitQuickKoli(it, rak, isi, lpnNo){
   var k=normKey(it.kode), n=normKey(it.nama), rr=normKey(rak), line=null;
   for(var i=0;i<state.bulk.koli.length;i++){ var r=state.bulk.koli[i]; if(normKey(r.kode)===k&&normKey(r.nama)===n&&normKey(r.rak)===rr&&(+r.isi||0)===isi){ line=r; break; } }
   var id,dus,isNew=false,prevDus=null,prevSub=null;
   if(line){ id=line.id; prevDus=line.dus; prevSub=line.subtotal; dus=(+line.dus||0)+1; line.dus=dus; line.subtotal=isi*dus; }
   else { isNew=true; id='K'+(new Date().getTime())+'-'+Math.floor(Math.random()*100000); dus=1; line={id:id,kode:it.kode,nama:it.nama,rak:rak,isi:isi,dus:1,subtotal:isi,pic:state.user}; state.bulk.koli.push(line); }
-  _lastKoliAdd={ id:id, isNew:isNew, prevDus:prevDus, prevSub:prevSub, kode:it.kode, nama:it.nama, isi:isi, rak:rak, dus:dus };
+  if(lpnNo){ line.lpn=lpnNo; lpnTandai(lpnNo,id); }
+  _lastKoliAdd={ id:id, isNew:isNew, prevDus:prevDus, prevSub:prevSub, kode:it.kode, nama:it.nama, isi:isi, rak:rak, dus:dus, lpn:lpnNo||'' };
   renderBulk(); focusScan();
-  toast(esc(it.nama).slice(0,18)+' +1 koli ('+isi+' pcs) → '+dus+' koli @ '+rak,'ok');
+  toast((lpnNo?lpnNo+' · ':'')+esc(it.nama).slice(0,18)+' +1 koli ('+isi+' pcs) → '+dus+' koli @ '+rak,'ok');
   function rollback(){ if(isNew){ state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(id);}); }
-    else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } } _lastKoliAdd=null; renderBulk(); }
-  postExec({ action:'bulksave', id:state.sessionId, koliId:id, kode:it.kode, nama:it.nama, rak:rak, isi:isi, dus:dus, pic:state.user })
+    else { for(var j=0;j<state.bulk.koli.length;j++){ if(String(state.bulk.koli[j].id)===String(id)){ state.bulk.koli[j].dus=prevDus; state.bulk.koli[j].subtotal=prevSub; break; } } }
+    if(lpnNo) lpnLepas(lpnNo);            // gagal simpan = koli belum terhitung
+    _lastKoliAdd=null; renderBulk(); }
+  postExec({ action:'bulksave', id:state.sessionId, koliId:id, kode:it.kode, nama:it.nama, rak:rak, isi:isi, dus:dus, pic:state.user, lpn:lpnNo||'' })
     .then(function(j){ if(!j||!j.ok){ rollback(); toast('Gagal simpan: '+((j&&j.error)||'?'),'err'); } })
     .catch(function(){ rollback(); toast('Gagal simpan (koneksi)','err'); });
 }
@@ -781,6 +896,9 @@ function commitQuickKoli(it, rak, isi){
 function undoLastKoli(){
   var la=_lastKoliAdd; if(!la){ return; }
   _lastKoliAdd=null;
+  // Tanda LPN ikut dilepas, kalau tidak koli itu tidak bisa discan lagi
+  // padahal hitungannya sudah dibatalkan.
+  if(la.lpn) lpnLepas(la.lpn);
   if(la.isNew){
     state.bulk.koli=state.bulk.koli.filter(function(x){return String(x.id)!==String(la.id);}); renderBulk();
     toast('Dibatalkan: '+esc(la.nama).slice(0,18),'warn');
