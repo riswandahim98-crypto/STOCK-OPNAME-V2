@@ -231,6 +231,12 @@ function show(id){ ['scSetup','scLogin','scPick','scList'].forEach(function(s){ 
 function toast(msg,kind){ var t=$('toast'); t.textContent=msg; t.className='toast show '+(kind||''); clearTimeout(t._t); t._t=setTimeout(function(){t.className='toast';},2200); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
 function normKey(v){ return String(v==null?'':v).trim().toUpperCase().replace(/\s+/g,''); }
+// Rak ditulis beda di dua tempat yang sama benarnya: WMS memakai '1-A',
+// daftar rak opname memakai '1A'. Membandingkannya mentah-mentah membuat
+// peringatan 'rak beda' muncul di HAMPIR SETIAP scan — dan peringatan
+// yang selalu muncul adalah peringatan yang berhenti dibaca orang.
+// Jadi pembandingnya membuang semua yang bukan huruf/angka.
+function normRak(v){ return String(v==null?'':v).toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function num(v){ if(v===''||v==null) return null; var n=parseFloat(String(v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?null:n; }
 function beep(kind){ try{var c=new(window.AudioContext||window.webkitAudioContext)();var o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=kind==='err'?220:kind==='warn'?440:880;g.gain.value=.08;o.start();setTimeout(function(){o.stop();c.close();},kind==='err'?260:110);}catch(e){} if(navigator.vibrate)navigator.vibrate(kind==='err'?[80,50,80]:40); }
 
@@ -527,7 +533,7 @@ function handleScanLpn(code){
   if(!(d.isi>0)){ beep('err'); toast('Isi koli '+no+' tidak terbaca di daftar WMS.','err'); return; }
   // Rak di WMS cuma diberitahukan, bukan dipaksakan: yang dipakai tetap rak
   // aktif di tangan petugas. Kalau beda, itu justru temuan opname.
-  if(d.rak && normKey(d.rak)!==normKey(rak)){
+  if(d.rak && normRak(d.rak)!==normRak(rak)){
     toast('Catatan: di WMS koli ini tercatat di rak '+d.rak+'.','warn');
   }
   // Koli yang di WMS sudah dipindahkan/dibongkar TETAP boleh dihitung —
@@ -645,9 +651,9 @@ function saveEditor(){
 // Dibaca dari tab 'LPN' di dokumen sesi (diisi Apps Script TarikLpnOpname.gs).
 // Kalau tabnya belum ada, aplikasi tetap jalan seperti dulu — scan kode
 // barang tidak terganggu sama sekali.
-function isLpn(code){ return /^LPN[-s]?d+$/i.test(String(code||'').trim()); }
+function isLpn(code){ return /^LPN[-\s]?\d+$/i.test(String(code||'').trim()); }
 function normLpn(code){
-  var m=String(code||'').trim().toUpperCase().match(/^LPN[-s]?(d+)$/);
+  var m=String(code||'').trim().toUpperCase().match(/^LPN[-\s]?(\d+)$/);
   return m ? 'LPN-'+m[1] : normKey(code);
 }
 function loadLpn(){
